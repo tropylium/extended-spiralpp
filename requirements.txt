@@ -1,0 +1,11 @@
+gitpython>=2.1  # For logging metadata.
+pandas          # For loading celeba-hq
+## Wrappers
+opencv-python   # for environment 
+## dev packages
+flake8
+black
+pre-commit
+## torchvision  # for downloading datasets
+requests
+tqdm
