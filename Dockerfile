@@ -123,12 +123,12 @@ RUN python setup.py install
 ENV OMP_NUM_THREADS 1
 
 # Run.
-CMD ["bash", "-c", "python -m torchbeast.polybeast \
+CMD ["python -m torchbeast.polybeast \
 	--dataset omniglot \
 	--total_steps 100000000 \
 	--episode_length 40 \
 	--use_pressure \
-	--batch_size 32"]
+	--batch_size 64"]
 
 
 
