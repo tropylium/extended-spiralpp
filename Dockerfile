@@ -122,19 +122,7 @@ RUN python setup.py install
 
 ENV OMP_NUM_THREADS 1
 
-# Run.
-CMD ["python -m torchbeast.polybeast \
-	--dataset omniglot \
-	--total_steps 100000000 \
-	--episode_length 40 \
-	--use_pressure \
-	--batch_size 64"]
-
-
-
 # Docker commands:
 #   docker rm spiralpp -v
 #   docker build -t spiralpp .
-#   docker run --name spiralpp spiralpp
-# or
-#   docker run --name spiralpp -it spiralpp /bin/bash
+#   docker run --name spiralpp -it spiralpp
