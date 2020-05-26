@@ -125,4 +125,4 @@ ENV OMP_NUM_THREADS 1
 # Docker commands:
 #   docker rm spiralpp -v
 #   docker build -t spiralpp .
-#   docker run --name spiralpp -it spiralpp
+#   docker run --name spiralpp -it spiralpp /bin/bash
