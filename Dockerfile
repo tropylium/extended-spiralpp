@@ -120,8 +120,6 @@ ENV LD_LIBRARY_PATH ${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH}
 
 RUN python setup.py install
 
-ENV OMP_NUM_THREADS 1
-
 # Docker commands:
 #   docker rm spiralpp -v
 #   docker build -t spiralpp .
