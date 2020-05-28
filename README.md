@@ -98,7 +98,7 @@ $ python setup.py install
 
 To start both the environment servers and the learner process, run
 ```shell
-$ python -m torchbeast.monobeast \
+$ python -m torchbeast.polybeast \
      --dataset celeba-hq \
      --env_type libmypaint \
      --canvas_width 64 \
