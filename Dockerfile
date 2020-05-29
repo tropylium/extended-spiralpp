@@ -120,7 +120,13 @@ ENV LD_LIBRARY_PATH ${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH}
 
 RUN python setup.py install
 
+ENV ENV OMP_NUM_THREADS 1
+
+CMD ["bash", "-c", "python -m torchbeast.polybeast --xpid example"]
+
 # Docker commands:
 #   docker rm spiralpp -v
 #   docker build -t spiralpp .
+#   docker run --name spiralpp spiralpp
+# or
 #   docker run --name spiralpp -it spiralpp /bin/bash
