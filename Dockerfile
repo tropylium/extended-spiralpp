@@ -54,11 +54,8 @@ RUN echo "conda activate spiralpp" >> /root/.bashrc
 ENV BASH_ENV /root/.bashrc
 
 # Clone spiralpp.
+RUN git clone https://github.com/urw7rs/spiralpp.git 
 WORKDIR /src/spiralpp
-
-COPY .git /src/spiralpp/.git
-
-RUN git reset --hard
 
 # install spiral env
 RUN git submodule update --init --recursive \
