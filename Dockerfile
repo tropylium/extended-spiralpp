@@ -70,8 +70,7 @@ WORKDIR /src/spiralpp/spiral-envs
 
 RUN pip install --no-cache-dir six scipy
 
-RUN patch setup.py setup.patch
-RUN patch CMakeLists.txt cmakelists.patch
+RUN patch setup.py setup.patch && patch CMakeLists.txt cmakelists.patch
 
 RUN pip install -e .
 
@@ -122,6 +121,7 @@ RUN python setup.py install
 
 ENV ENV OMP_NUM_THREADS 1
 
+# Run
 CMD ["bash", "-c", "python -m torchbeast.polybeast --xpid example"]
 
 # Docker commands:

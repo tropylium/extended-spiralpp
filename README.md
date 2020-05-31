@@ -181,19 +181,13 @@ nested structures. Some functions are exported to Python using
 pybind11.
 
 `third_party`: Collection of third-party dependencies as Git
-submodules. Includes [gRPC](https://grpc.io/), .
+submodules. Includes [gRPC](https://grpc.io/).
 
 `torchbeast`: Contains `monobeast.py`, and `polybeast.py` and
 `polybeast_env.py`. (`monobeast.py` is currently unavailable)
 
 `spiral-envs`: [spiral-envs](https://github.com/urw7rs/spiral-envs/tree/f4deb68b867a5688eb597902b7086f6914c33901) is a libmypaint and fluidpaint based environments. ported to openai
 gym from [spiral](https://github.com/deepmind/spiral/tree/master/spiral/environments).
-
-## TODO
-- [x] environments with compound action space 
-- [x] environments with penalty on stroke length and new stroke
-- [ ] population based training (no plans as of now)
-- [ ] python tests like the original torchbeast has
 
 ## License
 
