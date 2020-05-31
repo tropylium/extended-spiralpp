@@ -355,13 +355,16 @@ def learn(
 
         actor_model.load_state_dict(model.state_dict())
 
+        reward = reward.mean(1)
+
         stats["step"] = stats.get("step", 0) + flags.unroll_length * flags.batch_size
         stats["total_loss"] = total_loss.item()
         stats["pg_loss"] = pg_loss.item()
         stats["baseline_loss"] = baseline_loss.item()
         stats["entropy_loss"] = entropy_loss.item()
-        stats["final_reward"] = reward[-1].mean().item()
-        stats["episode_reward"] = reward.mean(dim=1).sum().item()
+        stats["mean_final_reward"] = reward[-1].item()
+        stats["mean_episode_reward"] = reward.sum().item()
+        stats["episode_reward"] = tuple(episode_returns.cpu().numpy())
         stats["learner_queue_size"] = learner_queue.size()
 
         if flags.condition:
