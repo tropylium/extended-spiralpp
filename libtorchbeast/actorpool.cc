@@ -429,7 +429,7 @@ class ActorPool {
         for (int t = 1; t <= unroll_length_; ++t) {
           all_agent_outputs = inference_batcher_->compute(compute_inputs);
 
-	      image = all_agent_outputs.get_vector()[3];
+	  image = all_agent_outputs.get_vector()[3];
           noise = all_agent_outputs.get_vector()[2];
           agent_state = all_agent_outputs.get_vector()[1];
           agent_outputs = all_agent_outputs.get_vector()[0];
