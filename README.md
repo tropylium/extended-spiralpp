@@ -107,7 +107,7 @@ $ python -m torchbeast.polybeast \
      --power_iters 40 \
      --num_actors 64 \
      --total_steps 30000000 \
-     --learning_rate 0.0004 \
+     --policy_learning_rate 0.0004 \
      --entropy_cost 0.01 \
      --batch_size 64 \
      --episode_length 40 \
