@@ -23,8 +23,9 @@ import threading
 import time
 import timeit
 import traceback
+import random
 
-os.environ["OMP_NUM_THREADS"] = "1"  # noqa Necessary for multithreading.
+os.environ["OMP_NUM_THREADS"] = "1"  # Necessary for multithreading.
 
 import nest
 import torch
@@ -43,7 +44,6 @@ from torchbeast.core import models
 from torchbeast.core import datasets
 
 from torchbeast import env_wrapper
-
 
 # yapf: disable
 parser = argparse.ArgumentParser(description="PyTorch Scalable Agent")
@@ -100,6 +100,8 @@ parser.add_argument("--num_inference_threads", default=2, type=int,
                     metavar="N", help="Number learner threads.")
 parser.add_argument("--disable_cuda", action="store_true",
                     help="Disable CUDA.")
+parser.add_argument("--replay_buffer_size", default=None, type=int, metavar="N",
+                    help="Replay buffer size. Defaults to batch_size * 10.")
 parser.add_argument("--max_learner_queue_size", default=None, type=int, metavar="N",
                     help="Optional maximum learner queue size. Defaults to batch_size.")
 parser.add_argument("--unroll_length", default=20, type=int, metavar="T",
@@ -135,7 +137,6 @@ parser.add_argument("--write_profiler_trace", action="store_true",
                     "for chrome://tracing/.")
 
 # yapf: enable
-
 
 logging.basicConfig(
     format=(
@@ -177,7 +178,46 @@ def compute_policy_gradient_loss(logits, actions, advantages):
     return torch.sum(cross_entropy * advantages.detach())
 
 
-def inference(flags, inference_batcher, model, image_queue, lock=threading.Lock()):
+class ReplayBuffer:
+    def __init__(self, capacity):
+        self.frames = [None]
+        self.images = [None]
+
+        self.capacity = capacity
+        self.position = 0
+
+    def push(self, frame, image):
+        frame = frame.split(1)
+        image = image.split(1)
+
+        free = self.capacity - self.position
+        request = len(frame)
+        if request > free:
+            self.frames[self.position :] = frame[:free]
+            self.images[self.position :] = image[:free]
+
+            frame = frame[free:]
+            image = image[free:]
+
+            self.position = 0
+
+            request - free
+
+        self.frames[self.position : self.position + request] = frame
+        self.images[self.position : self.position + request] = image
+
+    def sample(self, batch_size):
+        frames = random.sample(self.frames, batch_size)
+        images = random.sample(self.images, batch_size)
+        return torch.cat(frames), torch.cat(images)
+
+    def __len__(self):
+        return len(self.frames)
+
+
+def inference(
+    flags, inference_batcher, model, image_queue, replay_buffer, lock=threading.Lock()
+):
     with torch.no_grad():
         for batch in inference_batcher:
             batched_env_outputs, action, agent_state, image = batch.get_inputs()
@@ -188,13 +228,15 @@ def inference(flags, inference_batcher, model, image_queue, lock=threading.Lock(
             done = done.to(flags.actor_device, non_blocking=True)
 
             if done.any().item():
+                replay_buffer.push(frame.squeeze(0), image.squeeze(0))
+
                 image_list = []
                 for i in range(done.shape[1]):
                     image_list.append(image_queue.get())
                 image = torch.stack(image_list, dim=1)
 
             if flags.condition:
-                image = image.to(flags.actor_device)
+                image = image.to(flags.actor_device, non_blocking=True)
                 condition = image
             else:
                 condition = None
@@ -234,7 +276,6 @@ Batch = collections.namedtuple("Batch", "env agent")
 def learn(
     flags,
     learner_queue,
-    d_queue,
     model,
     actor_model,
     D,
@@ -254,8 +295,6 @@ def learn(
         env_outputs, actor_outputs, noise = batch
         batch = (env_outputs, actor_outputs)
         frame, reward, done, *_ = env_outputs
-
-        d_queue.put((frame, image.squeeze(0)))
 
         lock.acquire()  # Only one thread learning at a time.
         optimizer.zero_grad()
@@ -364,7 +403,7 @@ def learn(
         stats["entropy_loss"] = entropy_loss.item()
         stats["mean_final_reward"] = reward[-1].item()
         stats["mean_episode_reward"] = reward.sum().item()
-        stats["episode_reward"] = tuple(episode_returns.cpu().numpy())
+        stats["episode_reward"] = tuple(reward.cpu().numpy())
         stats["learner_queue_size"] = learner_queue.size()
 
         if flags.condition:
@@ -384,7 +423,7 @@ fake_label = 0.0
 
 def learn_D(
     flags,
-    queue,
+    replay_buffer,
     D,
     D_eval,
     optimizer,
@@ -394,8 +433,12 @@ def learn_D(
     lock=threading.Lock(),
 ):
     while True:
+        if len(replay_buffer) < flags.batch_size:
+            continue
+
         fake, real = nest.map(
-            lambda t: t.to(flags.learner_device, non_blocking=True), queue.get()
+            lambda t: t.to(flags.learner_device, non_blocking=True),
+            replay_buffer.sample(flags.batch_size),
         )
 
         if flags.condition:
@@ -420,12 +463,6 @@ def learn_D(
 
         nn.utils.clip_grad_norm_(D.parameters(), flags.grad_norm_clipping)
 
-        if flags.condition:
-            T, *_ = fake.shape
-            condition = condition.repeat(T, 1, 1, 1)
-
-        fake = torch.flatten(fake, 0, 1)
-
         D = D.train()
         if flags.condition:
             p_fake = D(fake, condition).view(-1)
@@ -433,9 +470,7 @@ def learn_D(
             p_fake = D(fake).view(-1)
 
         label.fill_(fake_label)
-        fake_loss = F.binary_cross_entropy_with_logits(
-            p_fake, label.repeat(flags.unroll_length + 1)
-        )
+        fake_loss = F.binary_cross_entropy_with_logits(p_fake, label)
 
         fake_loss.backward()
         D_G_z1 = torch.sigmoid(p_fake).mean()
@@ -510,7 +545,10 @@ def train(flags):
         maximum_queue_size=flags.max_learner_queue_size,
     )
 
-    d_queue = Queue(maxsize=flags.max_learner_queue_size // flags.batch_size)
+    if flags.replay_buffer_size is None:
+        flags.replay_buffer_size = flags.batch_size * 10
+
+    replay_buffer = ReplayBuffer(flags.replay_buffer_size)
     image_queue = Queue(maxsize=flags.max_learner_queue_size)
 
     # The "batcher", a queue for the inference call. Will yield
@@ -704,7 +742,6 @@ def train(flags):
             args=(
                 flags,
                 learner_queue,
-                d_queue,
                 model,
                 actor_model,
                 D_eval,
@@ -720,7 +757,7 @@ def train(flags):
         threading.Thread(
             target=inference,
             name="inference-thread-%i" % i,
-            args=(flags, inference_batcher, actor_model, image_queue,),
+            args=(flags, inference_batcher, actor_model, image_queue, replay_buffer,),
         )
         for i in range(flags.num_inference_threads)
     ]
@@ -729,7 +766,16 @@ def train(flags):
         threading.Thread(
             target=learn_D,
             name="d_learner-thread-%i" % i,
-            args=(flags, d_queue, D, D_eval, D_optimizer, D_scheduler, stats, plogger,),
+            args=(
+                flags,
+                replay_buffer,
+                D,
+                D_eval,
+                D_optimizer,
+                D_scheduler,
+                stats,
+                plogger,
+            ),
         )
         for i in range(flags.num_learner_threads)
     ]
@@ -1035,7 +1081,7 @@ def main(flags):
                 [
                     f"--env={env_name}",
                     f"--brush_type={flags.brush_type}",
-                    f"--background=white",
+                    "--background=white",
                     f"--brushes_basedir={BRUSHES_BASEDIR}",
                 ]
             )
