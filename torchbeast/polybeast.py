@@ -101,7 +101,7 @@ parser.add_argument("--num_inference_threads", default=2, type=int,
 parser.add_argument("--disable_cuda", action="store_true",
                     help="Disable CUDA.")
 parser.add_argument("--replay_buffer_size", default=None, type=int, metavar="N",
-                    help="Replay buffer size. Defaults to batch_size * 10.")
+                    help="Replay buffer size. Defaults to batch_size * 20.")
 parser.add_argument("--max_learner_queue_size", default=None, type=int, metavar="N",
                     help="Optional maximum learner queue size. Defaults to batch_size.")
 parser.add_argument("--unroll_length", default=20, type=int, metavar="T",
@@ -546,7 +546,7 @@ def train(flags):
     )
 
     if flags.replay_buffer_size is None:
-        flags.replay_buffer_size = flags.batch_size * 10
+        flags.replay_buffer_size = flags.batch_size * 20
 
     replay_buffer = ReplayBuffer(flags.replay_buffer_size)
     image_queue = Queue(maxsize=flags.max_learner_queue_size)
