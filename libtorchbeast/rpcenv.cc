@@ -54,6 +54,7 @@ class EnvServer {
       bool done = true;
       int episode_step = 0;
       float episode_return = 0.0;
+      bool terminate = false;
 
       auto set_observation = py::cpp_function(
           [&observation](PyArrayNest o) { observation = std::move(o); },
@@ -82,8 +83,7 @@ class EnvServer {
 
       Step step_pb;
       fill_nest_pb(step_pb.mutable_observation(), std::move(observation),
-                   fill_ndarray_pb);
-
+                   fill_ndarray_pb); 
       step_pb.set_reward(reward);
       step_pb.set_done(done);
       step_pb.set_episode_step(episode_step);
@@ -100,23 +100,33 @@ class EnvServer {
         }
         try {
           // I'm not sure if this is fast, but it's convienient.
-          set_observation_reward_done(*stepfunc(nest_pb_to_nest(
-              action_pb.mutable_nest_action(), array_pb_to_nest)));
+	  if (terminate) {
+	    set_observation(resetfunc());
+            // Reset episode_* for the _next_ step.
+	    reward = 0.0;
+            done = true;
+            episode_step = 0;
+            episode_return = 0.0;
+	    terminate = false;
+	  } else { 
+	    set_observation_reward_done(*stepfunc(nest_pb_to_nest(
+	        action_pb.mutable_nest_action(), array_pb_to_nest)));
 
-          episode_step += 1;
-          episode_return += reward;
+            episode_step += 1;
+            episode_return += reward;
+
+	    if (done) {
+              terminate = true;
+	      done = false;
+	    }
+
+	  }
 
           step_pb.Clear();
           step_pb.set_reward(reward);
           step_pb.set_done(done);
           step_pb.set_episode_step(episode_step);
           step_pb.set_episode_return(episode_return);
-          if (done) {
-            set_observation(resetfunc());
-            // Reset episode_* for the _next_ step.
-            episode_step = 0;
-            episode_return = 0.0;
-          }
         } catch (const pybind11::error_already_set &e) {
           std::cerr << e.what() << std::endl;
           return grpc::Status(grpc::INTERNAL, e.what());

@@ -180,39 +180,44 @@ def compute_policy_gradient_loss(logits, actions, advantages):
 
 class ReplayBuffer:
     def __init__(self, capacity):
-        self.frames = [None]
-        self.images = [None]
+        self.buffer = []
 
         self.capacity = capacity
         self.position = 0
 
     def push(self, frame, image):
-        frame = frame.split(1)
-        image = image.split(1)
+        pairs = list(zip(frame.split(1), image.split(1)))
+        request = len(pairs)
 
         free = self.capacity - self.position
-        request = len(frame)
-        if request > free:
-            self.frames[self.position :] = frame[:free]
-            self.images[self.position :] = image[:free]
+        available = len(self.buffer) - self.position
+        if available < free:
+            if request > self.capacity:
+                size = free
+            else:
+                size = request
+            self.buffer.extend([None for _ in range(size)])
 
-            frame = frame[free:]
-            image = image[free:]
+        if request > free:
+            self.buffer[self.position :] = pairs[:free]
+
+            pairs = pairs[free:]
 
             self.position = 0
 
-            request - free
+            request -= free
 
-        self.frames[self.position : self.position + request] = frame
-        self.images[self.position : self.position + request] = image
+        self.buffer[self.position : self.position + request] = pairs
+        self.position = (self.position + request) % self.capacity
 
     def sample(self, batch_size):
-        frames = random.sample(self.frames, batch_size)
-        images = random.sample(self.images, batch_size)
-        return torch.cat(frames), torch.cat(images)
+        pairs = random.sample(self.buffer, batch_size)
+        frame, image = zip(*pairs)
+
+        return torch.cat(frame), torch.cat(image)
 
     def __len__(self):
-        return len(self.frames)
+        return len(self.buffer)
 
 
 def inference(
@@ -223,47 +228,63 @@ def inference(
             batched_env_outputs, action, agent_state, image = batch.get_inputs()
             action = action.to(flags.actor_device, non_blocking=True)
 
-            frame, _, done, *_ = batched_env_outputs
-            frame = frame.to(flags.actor_device, non_blocking=True)
-            done = done.to(flags.actor_device, non_blocking=True)
+            frame, _, done, step, _ = batched_env_outputs
 
-            if done.any().item():
+            if step == flags.episode_length - 1:
                 replay_buffer.push(frame.squeeze(0), image.squeeze(0))
-
-                image_list = []
-                for i in range(done.shape[1]):
-                    image_list.append(image_queue.get())
-                image = torch.stack(image_list, dim=1)
-
-            if flags.condition:
-                image = image.to(flags.actor_device, non_blocking=True)
-                condition = image
-            else:
-                condition = None
-
-            agent_state = nest.map(
-                lambda t: t.to(flags.actor_device, non_blocking=True), agent_state,
-            )
-
-            with lock:
                 T, B, *_ = frame.shape
-                noise = torch.randn(T, B, 10).to(flags.actor_device, non_blocking=True)
-                model = model.eval()
-                outputs = model(
-                    dict(
-                        obs=frame,
-                        condition=condition,
-                        action=action,
-                        noise=noise,
-                        done=done,
-                    ),
-                    agent_state,
+                logits = tuple(map(lambda n: torch.zeros(T, B, n), model._action_shape))
+                dummy_output = (
+                    model.initial_action(B),
+                    logits,
+                    torch.zeros(T, B),
+                )
+                dummy_noise = torch.zeros(T, B, 10)
+                batch.set_outputs(
+                    (dummy_output, model.initial_state(B), dummy_noise, image.cpu(),)
+                )
+            else:
+                frame = frame.to(flags.actor_device, non_blocking=True)
+                done = done.to(flags.actor_device, non_blocking=True)
+
+                if done.any().item():
+                    replay_buffer.push(frame.squeeze(0), image.squeeze(0))
+                    image_list = []
+                    for i in range(done.shape[1]):
+                        image_list.append(image_queue.get())
+                    image = torch.stack(image_list, dim=1)
+
+                if flags.condition:
+                    image = image.to(flags.actor_device, non_blocking=True)
+                    condition = image
+                else:
+                    condition = None
+
+                agent_state = nest.map(
+                    lambda t: t.to(flags.actor_device, non_blocking=True), agent_state,
                 )
 
-            outputs = nest.map(lambda t: t.cpu(), outputs)
-            core_output, core_state = outputs
+                with lock:
+                    T, B, *_ = frame.shape
+                    noise = torch.randn(T, B, 10).to(
+                        flags.actor_device, non_blocking=True
+                    )
+                    model = model.eval()
+                    outputs = model(
+                        dict(
+                            obs=frame,
+                            condition=condition,
+                            action=action,
+                            noise=noise,
+                            done=done,
+                        ),
+                        agent_state,
+                    )
 
-            batch.set_outputs((core_output, core_state, noise, image.cpu()))
+                outputs = nest.map(lambda t: t.cpu(), outputs)
+                core_output, core_state = outputs
+
+                batch.set_outputs((core_output, core_state, noise, image.cpu()))
 
 
 EnvOutput = collections.namedtuple(
@@ -290,7 +311,7 @@ def learn(
             lambda t: t.to(flags.learner_device, non_blocking=True), tensors
         )
 
-        batch, agent_state, image = tensors
+        batch, initial_action, agent_state, image = tensors
 
         env_outputs, actor_outputs, noise = batch
         batch = (env_outputs, actor_outputs)
@@ -299,6 +320,7 @@ def learn(
         lock.acquire()  # Only one thread learning at a time.
         optimizer.zero_grad()
 
+        print(env_outputs[-2])
         actor_outputs = AgentOutput._make(actor_outputs)
 
         if flags.condition:
@@ -306,6 +328,10 @@ def learn(
         else:
             condition = None
 
+        print(frame.mean([1, 2, 3, 4]))
+        print(done)
+        print(frame.shape)
+        print(actor_outputs.action.shape)
         model = model.train()
         learner_outputs, agent_state = model(
             dict(
@@ -671,6 +697,7 @@ def train(flags):
     # The ActorPool that will run `flags.num_actors` many loops.
     actors = actorpool.ActorPool(
         unroll_length=flags.unroll_length,
+        episode_length=flags.episode_length,
         learner_queue=learner_queue,
         inference_batcher=inference_batcher,
         env_server_addresses=addresses,

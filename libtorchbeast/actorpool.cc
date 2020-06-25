@@ -342,13 +342,15 @@ class DynamicBatcher {
 
 class ActorPool {
  public:
-  ActorPool(int unroll_length, std::shared_ptr<BatchingQueue<>> learner_queue,
+  ActorPool(int unroll_length, int episode_length, 
+	    std::shared_ptr<BatchingQueue<>> learner_queue,
             std::shared_ptr<DynamicBatcher> inference_batcher,
             std::vector<std::string> env_server_addresses,
             TensorNest initial_action,
             TensorNest initial_agent_state,
-	        TensorNest image)
+	    TensorNest image)
       : unroll_length_(unroll_length),
+	episode_length_(episode_length),
         learner_queue_(std::move(learner_queue)),
         inference_batcher_(std::move(inference_batcher)),
         env_server_addresses_(std::move(env_server_addresses)),
@@ -412,6 +414,7 @@ class ActorPool {
     TensorNest noise = all_agent_outputs.get_vector()[2];
     TensorNest agent_state = all_agent_outputs.get_vector()[1];
     TensorNest agent_outputs = all_agent_outputs.get_vector()[0];
+    TensorNest action;
 
     if (!agent_outputs.is_vector()) {
       throw py::value_error(
@@ -423,10 +426,21 @@ class ActorPool {
     rpcenv::Action action_pb;
     std::vector<TensorNest> rollout;
     try {
+      int episode = 1;
+      int t;
       while (true) {
         rollout.push_back(std::move(last));
 
-        for (int t = 1; t <= unroll_length_; ++t) {
+	episode += unroll_length_;
+
+	if (episode >= episode_length_) {
+	  episode = (episode + 1) % episode_length_;
+	  t = 0;
+	} else {
+	  t = 1;
+	}
+
+	for (; t <= unroll_length_; t++) {
           all_agent_outputs = inference_batcher_->compute(compute_inputs);
 
 	  image = all_agent_outputs.get_vector()[3];
@@ -435,7 +449,7 @@ class ActorPool {
           agent_outputs = all_agent_outputs.get_vector()[0];
 
           // agent_outputs must be a tuple/list.
-          const TensorNest& action = agent_outputs.get_vector().front();
+	  action = agent_outputs.get_vector().front();
           action_pb.Clear();
 
           fill_nest_pb(
@@ -449,6 +463,7 @@ class ActorPool {
             throw py::connection_error("Read failed.");
           }
           env_outputs = ActorPool::step_pb_to_nest(&step_pb);
+
           compute_inputs =
             TensorNest(std::vector({env_outputs, action, agent_state, image}));
 
@@ -457,11 +472,15 @@ class ActorPool {
         }
         last = rollout.back();
         learner_queue_->enqueue({
-            TensorNest(std::vector({batch(rollout, 0), std::move(initial_agent_state),
-                std::move(image)})),
+          TensorNest(
+	    std::vector({batch(rollout, 0), 
+	    std::move(initial_action), std::move(initial_agent_state),
+            std::move(image)})
+	  ),
         });
         rollout.clear();
         initial_agent_state = agent_state;  // Copy
+	initial_action = action;
         count_ += unroll_length_;
       }
     } catch (const ClosedBatchingQueue& e) {
@@ -572,6 +591,7 @@ class ActorPool {
   std::atomic_uint64_t count_;
 
   const int unroll_length_;
+  const int episode_length_;
   std::shared_ptr<BatchingQueue<>> learner_queue_;
   std::shared_ptr<DynamicBatcher> inference_batcher_;
   const std::vector<std::string> env_server_addresses_;
@@ -586,10 +606,11 @@ PYBIND11_MODULE(actorpool, m) {
   py::register_exception<std::bad_variant_access>(m, "NestError");
 
   py::class_<ActorPool>(m, "ActorPool")
-      .def(py::init<int, std::shared_ptr<BatchingQueue<>>,
+      .def(py::init<int, int, std::shared_ptr<BatchingQueue<>>,
                     std::shared_ptr<DynamicBatcher>, std::vector<std::string>,
                     TensorNest, TensorNest, TensorNest>(),
-           py::arg("unroll_length"), py::arg("learner_queue").none(false),
+           py::arg("unroll_length"), py::arg("episode_length"), 
+	   py::arg("learner_queue").none(false),
            py::arg("inference_batcher").none(false),
            py::arg("env_server_addresses"),
            py::arg("initial_action"),
