@@ -427,17 +427,15 @@ class ActorPool {
     std::vector<TensorNest> rollout;
     try {
       int episode = 1;
-      int t;
       while (true) {
         rollout.push_back(std::move(last));
 
 	episode += unroll_length_;
 
+	int t = 1;
 	if (episode >= episode_length_) {
+	  t -= episode / episode_length_;
 	  episode = (episode + 1) % episode_length_;
-	  t = 0;
-	} else {
-	  t = 1;
 	}
 
 	for (; t <= unroll_length_; t++) {
