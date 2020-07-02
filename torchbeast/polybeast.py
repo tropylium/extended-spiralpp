@@ -31,19 +31,18 @@ import nest
 import torch
 import torch.optim as optim
 import torchvision.transforms as transforms
-from queue import Queue
 from libtorchbeast import actorpool
 from torch import nn
 from torch.nn import functional as F
 from torchvision.datasets import CelebA, Omniglot, MNIST
-
 from torch.utils.data import DataLoader
+
+from torchbeast import env_wrapper
 from torchbeast.core import file_writer
 from torchbeast.core import vtrace
 from torchbeast.core import models
 from torchbeast.core import datasets
 
-from torchbeast import env_wrapper
 
 # yapf: disable
 parser = argparse.ArgumentParser(description="PyTorch Scalable Agent")
@@ -185,9 +184,9 @@ class ReplayBuffer:
         self.capacity = capacity
         self.position = 0
 
-    def push(self, frame, image):
-        pairs = list(zip(frame.split(1), image.split(1)))
-        request = len(pairs)
+    def push(self, frame):
+        frames = frame.split(1)
+        request = len(frames)
 
         free = self.capacity - self.position
         available = len(self.buffer) - self.position
@@ -199,92 +198,53 @@ class ReplayBuffer:
             self.buffer.extend([None for _ in range(size)])
 
         if request > free:
-            self.buffer[self.position :] = pairs[:free]
+            self.buffer[self.position :] = frames[:free]
 
-            pairs = pairs[free:]
+            frames = frames[free:]
 
             self.position = 0
 
             request -= free
 
-        self.buffer[self.position : self.position + request] = pairs
+        self.buffer[self.position : self.position + request] = frames
         self.position = (self.position + request) % self.capacity
 
     def sample(self, batch_size):
-        pairs = random.sample(self.buffer, batch_size)
-        frame, image = zip(*pairs)
+        frames = random.sample(self.buffer, batch_size)
 
-        return torch.cat(frame), torch.cat(image)
+        return torch.cat(frames)
 
     def __len__(self):
         return len(self.buffer)
 
 
-def inference(
-    flags, inference_batcher, model, image_queue, replay_buffer, lock=threading.Lock()
-):
+def inference(flags, inference_batcher, model, lock=threading.Lock()):
     with torch.no_grad():
         for batch in inference_batcher:
-            batched_env_outputs, action, agent_state, image = batch.get_inputs()
+            batched_env_outputs, action, noise, agent_state = batch.get_inputs()
             action = action.to(flags.actor_device, non_blocking=True)
 
             frame, _, done, step, _ = batched_env_outputs
 
-            if step == flags.episode_length - 1:
-                replay_buffer.push(frame.squeeze(0), image.squeeze(0))
+            frame = frame.to(flags.actor_device, non_blocking=True)
+            done = done.to(flags.actor_device, non_blocking=True)
+
+            agent_state = nest.map(
+                lambda t: t.to(flags.actor_device, non_blocking=True), agent_state,
+            )
+
+            with lock:
                 T, B, *_ = frame.shape
-                logits = tuple(map(lambda n: torch.zeros(T, B, n), model._action_shape))
-                dummy_output = (
-                    model.initial_action(B),
-                    logits,
-                    torch.zeros(T, B),
-                )
-                dummy_noise = torch.zeros(T, B, 10)
-                batch.set_outputs(
-                    (dummy_output, model.initial_state(B), dummy_noise, image.cpu(),)
-                )
-            else:
-                frame = frame.to(flags.actor_device, non_blocking=True)
-                done = done.to(flags.actor_device, non_blocking=True)
-
-                if done.any().item():
-                    replay_buffer.push(frame.squeeze(0), image.squeeze(0))
-                    image_list = []
-                    for i in range(done.shape[1]):
-                        image_list.append(image_queue.get())
-                    image = torch.stack(image_list, dim=1)
-
-                if flags.condition:
-                    image = image.to(flags.actor_device, non_blocking=True)
-                    condition = image
-                else:
-                    condition = None
-
-                agent_state = nest.map(
-                    lambda t: t.to(flags.actor_device, non_blocking=True), agent_state,
+                model = model.eval()
+                outputs = model(
+                    dict(obs=frame, action=action, noise=noise, done=done,),
+                    agent_state,
                 )
 
-                with lock:
-                    T, B, *_ = frame.shape
-                    noise = torch.randn(T, B, 10).to(
-                        flags.actor_device, non_blocking=True
-                    )
-                    model = model.eval()
-                    outputs = model(
-                        dict(
-                            obs=frame,
-                            condition=condition,
-                            action=action,
-                            noise=noise,
-                            done=done,
-                        ),
-                        agent_state,
-                    )
+            outputs = nest.map(lambda t: t.cpu(), outputs)
+            core_output, core_state = outputs
 
-                outputs = nest.map(lambda t: t.cpu(), outputs)
-                core_output, core_state = outputs
-
-                batch.set_outputs((core_output, core_state, noise, image.cpu()))
+            batch.set_outputs((core_output, core_state))
 
 
 EnvOutput = collections.namedtuple(
@@ -311,64 +271,58 @@ def learn(
             lambda t: t.to(flags.learner_device, non_blocking=True), tensors
         )
 
-        batch, initial_action, agent_state, image = tensors
+        batch, initial_agent_state, final_render = tensors
 
-        env_outputs, actor_outputs, noise = batch
+        env_outputs, actor_outputs, prev_action, noise = batch
         batch = (env_outputs, actor_outputs)
-        frame, reward, done, *_ = env_outputs
+        frame, reward, done, step, _ = env_outputs
+
+        if done[1:].any().item():
+            index = done[1:].nonzero()
+            final_render = final_render[0, index[:, 1]]
+            final_render_exists = True
+        else:
+            del final_render
+            final_render_exists = False
 
         lock.acquire()  # Only one thread learning at a time.
+        if flags.use_tca:
+            flat_frame = torch.flatten(frame, 0, 1)
+
+            with torch.no_grad():
+                if final_render_exists:
+                    p = D(torch.cat([flat_frame, final_render]))
+                    index[:, 0] += 1
+
+                    p_t_plus_1 = p[: -index.shape[0]].view(-1, flags.batch_size)
+                    p_t = p_t_plus_1[:-1]
+
+                    p_t_plus_1[index[:, 0], index[:, 1]] = p[-index.shape[0] :]
+                    p_t_plus_1 = p_t_plus_1[1:]
+
+                    reward[1:] += p_t_plus_1 - p_t
+                else:
+                    p = D(flat_frame).view(-1, flags.batch_size)
+                    reward[1:] += p[1:] - p[:-1]
+
+        elif final_render_exists:
+            with torch.no_grad():
+                p = D(final_render)
+                reward[index[:, 0], index[:, 1]] += p
+
+        env_outputs = list(env_outputs)
+        env_outputs[1] = reward
+        env_outputs = tuple(env_outputs)
+
         optimizer.zero_grad()
 
-        print(env_outputs[-2])
         actor_outputs = AgentOutput._make(actor_outputs)
 
-        if flags.condition:
-            condition = image
-        else:
-            condition = None
-
-        print(frame.mean([1, 2, 3, 4]))
-        print(done)
-        print(frame.shape)
-        print(actor_outputs.action.shape)
         model = model.train()
         learner_outputs, agent_state = model(
-            dict(
-                obs=frame,
-                condition=condition,
-                action=actor_outputs.action,
-                noise=noise,
-                done=done,
-            ),
-            agent_state,
+            dict(obs=frame, action=prev_action, noise=noise, done=done,),
+            initial_agent_state,
         )
-
-        if flags.use_tca:
-            frame = torch.flatten(frame, 0, 1)
-            if flags.condition:
-                condition = torch.flatten(condition, 0, 1)
-        else:
-            frame = frame[-1]
-            if flags.condition:
-                condition = condition[-1]
-
-        D = D.eval()
-        with torch.no_grad():
-            if flags.condition:
-                p = D(frame, condition).view(-1, flags.batch_size)
-            else:
-                p = D(frame).view(-1, flags.batch_size)
-
-            if flags.use_tca:
-                d_reward = p[1:] - p[:-1]
-                reward = reward[1:] + d_reward
-            else:
-                reward[-1] = reward[-1] + p
-                reward = reward[1:]
-
-            # empty condition
-            condition = None
 
         # Take final value function slice for bootstrapping.
         learner_outputs = AgentOutput._make(learner_outputs)
@@ -394,7 +348,7 @@ def learn(
             target_policy_logits=learner_outputs.policy_logits,
             actions=action,
             discounts=discounts,
-            rewards=reward,
+            rewards=env_outputs.reward,
             values=learner_outputs.baseline,
             bootstrap_value=bootstrap_value,
         )
@@ -420,14 +374,14 @@ def learn(
 
         actor_model.load_state_dict(model.state_dict())
 
-        reward = reward.mean(1)
-
+        index = done[1:].nonzero()
         stats["step"] = stats.get("step", 0) + flags.unroll_length * flags.batch_size
         stats["total_loss"] = total_loss.item()
         stats["pg_loss"] = pg_loss.item()
         stats["baseline_loss"] = baseline_loss.item()
         stats["entropy_loss"] = entropy_loss.item()
-        stats["mean_final_reward"] = reward[-1].item()
+        stats["mean_final_reward"] = reward[index].mean().item()
+        reward = reward.mean(1)
         stats["mean_episode_reward"] = reward.sum().item()
         stats["episode_reward"] = tuple(reward.cpu().numpy())
         stats["learner_queue_size"] = learner_queue.size()
@@ -437,7 +391,7 @@ def learn(
                 _, C, H, W = frame.shape
                 frame = frame.view(flags.unroll_length, flags.batch_size, C, H, W)
                 frame = frame[-1]
-            stats["l2_loss"] = F.mse_loss(frame, image.squeeze(0)).item()
+            stats["l2_loss"] = F.mse_loss(frame[C / 2, :], frame[C / 2, :]).item()
 
         plogger.log(stats)
         lock.release()
@@ -449,6 +403,8 @@ fake_label = 0.0
 
 def learn_D(
     flags,
+    dataloader,
+    replay_queue,
     replay_buffer,
     D,
     D_eval,
@@ -458,28 +414,24 @@ def learn_D(
     plogger,
     lock=threading.Lock(),
 ):
-    while True:
+    data = iter(dataloader)
+    real = None
+
+    for obs in replay_queue:
+        replay_buffer.push(obs.squeeze(0))
+        if real is None:
+            real, _ = next(data)
+
         if len(replay_buffer) < flags.batch_size:
             continue
 
-        fake, real = nest.map(
-            lambda t: t.to(flags.learner_device, non_blocking=True),
-            replay_buffer.sample(flags.batch_size),
-        )
-
-        if flags.condition:
-            condition = real
-        else:
-            condition = None
+        fake = replay_buffer.sample(flags.batch_size)
 
         lock.acquire()
         optimizer.zero_grad()
 
         D = D.train()
-        if flags.condition:
-            p_real = D(real, condition).view(-1)
-        else:
-            p_real = D(real).view(-1)
+        p_real = D(real).view(-1)
 
         label = torch.full((flags.batch_size,), real_label, device=flags.learner_device)
         real_loss = F.binary_cross_entropy_with_logits(p_real, label)
@@ -490,10 +442,7 @@ def learn_D(
         nn.utils.clip_grad_norm_(D.parameters(), flags.grad_norm_clipping)
 
         D = D.train()
-        if flags.condition:
-            p_fake = D(fake, condition).view(-1)
-        else:
-            p_fake = D(fake).view(-1)
+        p_fake = D(fake).view(-1)
 
         label.fill_(fake_label)
         fake_loss = F.binary_cross_entropy_with_logits(p_fake, label)
@@ -516,19 +465,9 @@ def learn_D(
         stats["D_x"] = D_x.item()
         stats["D_G_z1"] = D_G_z1.item()
 
+        real = None
+
         lock.release()
-
-
-def data_loader(
-    flags, dataloader, image_queue,
-):
-    while True:
-        for tensors in dataloader:
-            if len(tensors) == 1:
-                image = tensors
-            elif len(tensors) <= 2:
-                image = tensors[0]
-            image_queue.put(image)
 
 
 BRUSHES_BASEDIR = os.path.join(os.getcwd(), "third_party/mypaint-brushes-1.3.0")
@@ -571,11 +510,22 @@ def train(flags):
         maximum_queue_size=flags.max_learner_queue_size,
     )
 
+    # The queue the actorpool stores final render image pairs.
+    # A seperate thread will load them to the ReplayBuffer.
+    # The batch size of the pairs will be dynamic.
+    replay_queue = actorpool.BatchingQueue(
+        batch_dim=1,
+        minimum_batch_size=1,
+        maximum_batch_size=flags.num_actors,
+        timeout_ms=100,
+        check_inputs=True,
+        maximum_queue_size=flags.num_actors,
+    )
+
     if flags.replay_buffer_size is None:
         flags.replay_buffer_size = flags.batch_size * 20
 
     replay_buffer = ReplayBuffer(flags.replay_buffer_size)
-    image_queue = Queue(maxsize=flags.max_learner_queue_size)
 
     # The "batcher", a queue for the inference call. Will yield
     # "batch" objects with `get_inputs` and `set_outputs` methods.
@@ -652,8 +602,6 @@ def train(flags):
         grid_shape=(grid_width, grid_width),
         order=order,
     )
-    if flags.condition:
-        model = models.Condition(model)
     model = model.to(device=flags.learner_device)
 
     actor_model = models.Net(
@@ -662,18 +610,12 @@ def train(flags):
         grid_shape=(grid_width, grid_width),
         order=order,
     )
-    if flags.condition:
-        actor_model = models.Condition(actor_model)
     actor_model.to(device=flags.actor_device)
 
     D = models.Discriminator(obs_shape, flags.power_iters)
-    if flags.condition:
-        D = models.Conditional(D)
     D.to(device=flags.learner_device)
 
     D_eval = models.Discriminator(obs_shape, flags.power_iters)
-    if flags.condition:
-        D_eval = models.Conditional(D_eval)
     D_eval = D_eval.to(device=flags.learner_device)
 
     optimizer = optim.Adam(model.parameters(), lr=flags.policy_learning_rate)
@@ -699,11 +641,11 @@ def train(flags):
         unroll_length=flags.unroll_length,
         episode_length=flags.episode_length,
         learner_queue=learner_queue,
+        replay_queue=replay_queue,
         inference_batcher=inference_batcher,
         env_server_addresses=addresses,
         initial_action=actor_model.initial_action(),
         initial_agent_state=actor_model.initial_state(),
-        image=torch.zeros(1, 1, C, H, W),
     )
 
     def run():
@@ -739,7 +681,11 @@ def train(flags):
         raise NotImplementedError
 
     dataloader = DataLoader(
-        dataset, batch_size=1, shuffle=True, drop_last=True, pin_memory=True
+        dataset,
+        batch_size=flags.batch_size,
+        shuffle=True,
+        drop_last=True,
+        pin_memory=True,
     )
 
     stats = {}
@@ -771,7 +717,7 @@ def train(flags):
                 learner_queue,
                 model,
                 actor_model,
-                D_eval,
+                D_eval.eval(),
                 optimizer,
                 scheduler,
                 stats,
@@ -780,46 +726,39 @@ def train(flags):
         )
         for i in range(flags.num_learner_threads)
     ]
+
     inference_threads = [
         threading.Thread(
             target=inference,
             name="inference-thread-%i" % i,
-            args=(flags, inference_batcher, actor_model, image_queue, replay_buffer,),
+            args=(flags, inference_batcher, actor_model,),
         )
         for i in range(flags.num_inference_threads)
     ]
 
-    d_learner = [
-        threading.Thread(
-            target=learn_D,
-            name="d_learner-thread-%i" % i,
-            args=(
-                flags,
-                replay_buffer,
-                D,
-                D_eval,
-                D_optimizer,
-                D_scheduler,
-                stats,
-                plogger,
-            ),
-        )
-        for i in range(flags.num_learner_threads)
-    ]
-    for thread in d_learner:
-        thread.daemon = True
-
-    dataloader_thread = threading.Thread(
-        target=data_loader, args=(flags, dataloader, image_queue,)
+    d_learner = threading.Thread(
+        target=learn_D,
+        name="d_learner-thread",
+        args=(
+            flags,
+            dataloader,
+            replay_queue,
+            replay_buffer,
+            D,
+            D_eval,
+            D_optimizer,
+            D_scheduler,
+            stats,
+            plogger,
+        ),
     )
-    dataloader_thread.daemon = True
+    d_learner.daemon = True
 
     actorpool_thread.start()
 
     threads = learner_threads + inference_threads
-    daemons = d_learner + [dataloader_thread]
 
-    for t in threads + daemons:
+    for t in threads + [d_learner]:
         t.start()
 
     def checkpoint():

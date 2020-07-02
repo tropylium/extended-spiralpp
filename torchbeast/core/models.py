@@ -346,6 +346,7 @@ class Discriminator(nn.Module):
             nn.LeakyReLU(0.2, True),
             # (ndf*8) x 4 x 4
             nn.Conv2d(ndf * 8, 1, 4, 1, 0, bias=False),
+            nn.Flatten(0),
         )
 
         for module in self.main.modules():
@@ -358,15 +359,3 @@ class Discriminator(nn.Module):
             return x
         else:
             return torch.sigmoid(x)
-
-
-class Conditional(nn.Module):
-    def __init__(self, D):
-        super(Conditional, self).__init__()
-        self.D = D
-
-    def forward(self, obs, condition):
-        half = obs.shape[-1] // 2
-        condition[:, :, :, half:] = obs[:, :, :, half:]
-        cat = torch.cat([obs, condition], dim=1)
-        return self.D(cat)
