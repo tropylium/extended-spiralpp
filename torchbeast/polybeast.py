@@ -281,6 +281,7 @@ def learn(
             index = done[1:].nonzero()
             final_render = final_render[0, index[:, 1]]
             final_render_exists = True
+            index[:, 0] += 1
         else:
             del final_render
             final_render_exists = False
@@ -292,7 +293,6 @@ def learn(
             with torch.no_grad():
                 if final_render_exists:
                     p = D(torch.cat([flat_frame, final_render]))
-                    index[:, 0] += 1
 
                     p_t_plus_1 = p[: -index.shape[0]].view(-1, flags.batch_size)
                     p_t = p_t_plus_1[:-1]
@@ -375,23 +375,26 @@ def learn(
         actor_model.load_state_dict(model.state_dict())
 
         index = done[1:].nonzero()
+        if flags.use_tca:
+            index[:, 0] += 1
+
+        episode_returns = (env_outputs.episode_return + env_outputs.reward)[
+            env_outputs.done
+        ]
         stats["step"] = stats.get("step", 0) + flags.unroll_length * flags.batch_size
+        stats["episode_returns"] = tuple(episode_returns.cpu().numpy())
+        stats["mean_episode_return"] = torch.mean(episode_returns).item()
         stats["total_loss"] = total_loss.item()
         stats["pg_loss"] = pg_loss.item()
         stats["baseline_loss"] = baseline_loss.item()
         stats["entropy_loss"] = entropy_loss.item()
-        stats["mean_final_reward"] = reward[index].mean().item()
-        reward = reward.mean(1)
-        stats["mean_episode_reward"] = reward.sum().item()
-        stats["episode_reward"] = tuple(reward.cpu().numpy())
         stats["learner_queue_size"] = learner_queue.size()
 
         if flags.condition:
-            if flags.use_tca:
-                _, C, H, W = frame.shape
-                frame = frame.view(flags.unroll_length, flags.batch_size, C, H, W)
-                frame = frame[-1]
-            stats["l2_loss"] = F.mse_loss(frame[C / 2, :], frame[C / 2, :]).item()
+            C = final_render.shape[1] // 2
+            stats["l2_loss"] = F.mse_loss(
+                final_render[:, :C, ...], final_render[:, :C, ...]
+            ).item()
 
         plogger.log(stats)
         lock.release()
