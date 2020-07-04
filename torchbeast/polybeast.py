@@ -221,25 +221,18 @@ class ReplayBuffer:
 def inference(flags, inference_batcher, model, lock=threading.Lock()):
     with torch.no_grad():
         for batch in inference_batcher:
-            batched_env_outputs, action, noise, agent_state = batch.get_inputs()
-            action = action.to(flags.actor_device, non_blocking=True)
+            batched_env_outputs, agent_state = batch.get_inputs()
 
-            frame, _, done, step, _ = batched_env_outputs
+            obs, _, done, step, _ = batched_env_outputs
 
-            frame = frame.to(flags.actor_device, non_blocking=True)
-            done = done.to(flags.actor_device, non_blocking=True)
-
-            agent_state = nest.map(
-                lambda t: t.to(flags.actor_device, non_blocking=True), agent_state,
+            obs, done, agent_state = nest.map(
+                lambda t: t.to(flags.actor_device, non_blocking=True),
+                [obs, done, agent_state],
             )
 
             with lock:
-                T, B, *_ = frame.shape
                 model = model.eval()
-                outputs = model(
-                    dict(obs=frame, action=action, noise=noise, done=done,),
-                    agent_state,
-                )
+                outputs = model(obs, done, agent_state)
 
             outputs = nest.map(lambda t: t.cpu(), outputs)
             core_output, core_state = outputs
@@ -271,24 +264,23 @@ def learn(
             lambda t: t.to(flags.learner_device, non_blocking=True), tensors
         )
 
-        batch, initial_agent_state, final_render = tensors
+        batch, initial_agent_state, final_obs = tensors
 
-        env_outputs, actor_outputs, prev_action, noise = batch
-        batch = (env_outputs, actor_outputs)
-        frame, reward, done, step, _ = env_outputs
+        env_outputs, actor_outputs = batch
+        obs, reward, done, step, _ = env_outputs
 
         if done[1:].any().item():
             index = done[1:].nonzero()
-            final_render = final_render[0, index[:, 1]]
+            final_render = final_obs["canvas"][0, index[:, 1]]
             final_render_exists = True
             index[:, 0] += 1
         else:
-            del final_render
+            del final_obs
             final_render_exists = False
 
         lock.acquire()  # Only one thread learning at a time.
         if flags.use_tca:
-            flat_frame = torch.flatten(frame, 0, 1)
+            flat_frame = torch.flatten(obs["canvas"], 0, 1)
 
             with torch.no_grad():
                 if final_render_exists:
@@ -319,10 +311,7 @@ def learn(
         actor_outputs = AgentOutput._make(actor_outputs)
 
         model = model.train()
-        learner_outputs, agent_state = model(
-            dict(obs=frame, action=prev_action, noise=noise, done=done,),
-            initial_agent_state,
-        )
+        learner_outputs, agent_state = model(obs, done, initial_agent_state)
 
         # Take final value function slice for bootstrapping.
         learner_outputs = AgentOutput._make(learner_outputs)
@@ -375,8 +364,7 @@ def learn(
         actor_model.load_state_dict(model.state_dict())
 
         index = done[1:].nonzero()
-        if flags.use_tca:
-            index[:, 0] += 1
+        index[:, 0] += 1
 
         episode_returns = (env_outputs.episode_return + env_outputs.reward)[
             env_outputs.done
@@ -417,13 +405,9 @@ def learn_D(
     plogger,
     lock=threading.Lock(),
 ):
-    data = iter(dataloader)
-    real = None
-
-    for obs in replay_queue:
-        replay_buffer.push(obs.squeeze(0))
-        if real is None:
-            real, _ = next(data)
+    for real, _ in dataloader:
+        obs = next(replay_queue)
+        replay_buffer.push(obs["canvas"].squeeze(0))
 
         if len(replay_buffer) < flags.batch_size:
             continue
@@ -467,8 +451,6 @@ def learn_D(
         stats["real_loss"] = real_loss.item()
         stats["D_x"] = D_x.item()
         stats["D_G_z1"] = D_G_z1.item()
-
-        real = None
 
         lock.release()
 
@@ -587,7 +569,7 @@ def train(flags):
     env = env_wrapper.make_raw(env_name, config)
     if frame_width != flags.canvas_width:
         env = env_wrapper.WarpFrame(env, height=frame_width, width=frame_width)
-    env = env_wrapper.wrap_pytorch(env)
+    env = env_wrapper.Base(env)
 
     obs_shape = env.observation_space.shape
     if flags.condition:
@@ -647,7 +629,6 @@ def train(flags):
         replay_queue=replay_queue,
         inference_batcher=inference_batcher,
         env_server_addresses=addresses,
-        initial_action=actor_model.initial_action(),
         initial_agent_state=actor_model.initial_state(),
     )
 

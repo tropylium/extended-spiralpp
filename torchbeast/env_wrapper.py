@@ -52,49 +52,54 @@ class WarpFrame(gym.ObservationWrapper):
             self._grayscale = False
 
     def observation(self, obs):
-        frame = obs
-
         frame = cv2.resize(
-            frame, (self._width, self._height), interpolation=cv2.INTER_AREA
+            obs["canvas"], (self._width, self._height), interpolation=cv2.INTER_AREA
         )
         if self._grayscale:
             frame = np.expand_dims(frame, -1)
+        obs["canvas"] = frame
 
-        return frame
+        return obs
 
 
-class ToTensor(gym.ActionWrapper):
-    def __init__(self, env):
-        gym.ActionWrapper.__init__(self, env)
+class Base(gym.ActionWrapper):
+    def __init__(self, env, noise_dim=10):
+        super(Base, self).__init__(env)
+        self.dim = noise_dim
+        self._initial_action = np.zeros(env.action_space.nvec.shape, dtype=np.int64)
+
+        original_space = env.observation_space
+        h, w, c = original_space.shape
+        new_space = gym.spaces.Box(low=0, high=255, shape=(c, h, w), dtype=np.uint8,)
+        self.observation_space = new_space
+
+    def _convert_to_dict(self, action):
+        return dict(zip(self.env.order, action.squeeze().tolist()))
+
+    def _to_NCHW(self, canvas):
+        return np.transpose(canvas, axes=(2, 0, 1))
+
+    def _sample_noise(self, dims):
+        return np.random.normal(size=(dims,)).astype(np.float32)
 
     def step(self, action):
-        return self.env.step(self.action(action))
-
-    def action(self, action):
-        action = dict(zip(self.env.order, action.astype(np.int64).tolist()))
-        return action
-
-    def reverse_action(self, action):
-        return np.asarray([action.values()], dtype=np.int64)
-
-
-class AddDim(gym.Wrapper):
-    """
-    add T and B dimension to observation
-    """
-
-    def step(self, action):
-        action = action.view(action.shape[-1]).numpy()
-        obs, reward, done, info = self.env.step(action)
-        obs = torch.as_tensor(obs).view((1, 1) + obs.shape)
-        reward = torch.as_tensor(reward).view(1, 1)
-        done = torch.as_tensor(done).view(1, 1)
-
+        obs, reward, done, info = self.env.step(self._convert_to_dict(action))
+        obs["canvas"] = self._to_NCHW(obs["canvas"])
+        obs["noise_sample"] = self.noise
+        obs["prev_action"] = self.prev_action
+        self.prev_action = action
         return obs, reward, done, info
 
     def reset(self):
         obs = self.env.reset()
-        obs = torch.as_tensor(obs).view((1, 1) + obs.shape)
+        obs["canvas"] = self._to_NCHW(obs["canvas"])
+
+        self.noise = self._sample_noise(self.dim)
+        obs["noise_sample"] = self.noise
+
+        self.prev_action = self._initial_action
+        obs["prev_action"] = self.prev_action
+
         return obs
 
 
@@ -102,31 +107,27 @@ def make_raw(env_id, config):
     env = gym.make("spiral:" + env_id)
     if len(config) > 0:
         env.configure(**config)
-    return ToTensor(env)
+    return env
 
 
-def wrap_deepmind(env, **kwargs):
-    return WarpFrame(env, **kwargs)
-
-
-class ImageToPyTorch(gym.ObservationWrapper):
+class ConcatTarget(gym.Wrapper):
     """
-    Image shape to channels x weight x height
+    Concat target to obs
     """
 
-    def __init__(self, env):
-        super(ImageToPyTorch, self).__init__(env)
-        old_shape = self.observation_space.shape
-        self.observation_space = gym.spaces.Box(
-            low=0,
-            high=255,
-            shape=(old_shape[-1], old_shape[0], old_shape[1]),
-            dtype=np.uint8,
-        )
+    def __init__(self, env, dataset):
+        super(ConcatTarget, self).__init__(env)
+        self.data = iter(dataset)
 
-    def observation(self, observation):
-        return np.transpose(observation, axes=(2, 0, 1))
+    def _concat(self, canvas):
+        return torch.cat([canvas, self.target])
 
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+        obs["canvas"] = self._concat(obs["canvas"])
+        return obs, reward, done, info
 
-def wrap_pytorch(env):
-    return ImageToPyTorch(env)
+    def reset(self):
+        obs = self.env.reset()
+        obs["canvas"] = self._concat(obs["canvas"])
+        return obs

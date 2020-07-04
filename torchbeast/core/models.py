@@ -18,8 +18,6 @@ import torch.nn.functional as F
 
 import nest
 
-from collections import OrderedDict
-
 
 class Net(nn.Module):
     def __init__(self, obs_shape, action_shape, grid_shape, order):
@@ -33,11 +31,9 @@ class Net(nn.Module):
 
         self.conv5x5 = nn.Conv2d(c + 2, 32, 5, 1, 2)
 
+        self.mask_mlp = MaskMLP(action_shape, grid_shape)
         self.action_fc = nn.Sequential(
-            ActionMask(self._order),
-            MLP(action_shape, grid_shape),
-            Linear(16 * len(action_shape), 64, 32),
-            View(-1, 32, 1, 1),
+            Linear(16 * len(action_shape), 64, 32), View(-1, 32, 1, 1),
         )
 
         self.fc = Linear(10, 64, 32)
@@ -77,18 +73,19 @@ class Net(nn.Module):
     def initial_state(self, batch_size=1):
         return tuple(torch.zeros(1, batch_size, 256) for _ in range(2))
 
-    def forward(self, input, core_state):
-        T, B, *_ = input["obs"].shape
+    def forward(self, obs, done, core_state):
+        T, B, *_ = obs["canvas"].shape
         grid = self.grid.repeat(T * B, 1, 1, 1)
 
-        notdone = (~input["done"]).float()
-        action = torch.flatten(input["action"] * notdone.unsqueeze(dim=2), 0, 1)
-        obs = torch.flatten(input["obs"].float(), 0, 1)
-        noise = torch.flatten(input["noise"], 0, 1)
+        notdone = (~done).float()
+        action = torch.flatten(obs["prev_action"] * notdone.unsqueeze(dim=2), 0, 1)
+        action_mask = torch.flatten(obs["action_mask"], 0, 1)
+        canvas = torch.flatten(obs["canvas"].float(), 0, 1)
+        noise = torch.flatten(obs["noise_sample"], 0, 1)
 
-        spatial = self.conv5x5(torch.cat([obs, grid], dim=1))
+        spatial = self.conv5x5(torch.cat([canvas, grid], dim=1))
         noise_embedding = self.fc(noise).view(-1, 32, 1, 1)
-        mlp = self.action_fc(action)
+        mlp = self.action_fc(self.mask_mlp(action, action_mask))
 
         embedding = self.relu(spatial + noise_embedding + mlp)
 
@@ -136,7 +133,16 @@ class Decoder(nn.Module):
             modules.append(module)
         self.decode = nn.ModuleList(modules)
 
-        self.mlp = MLP(action_shape, grid_shape)
+        modules = []
+        for i, shape in enumerate(action_shape):
+            if i < 2:
+                module = Location(grid_shape)
+            else:
+                module = Scalar(shape)
+            modules.append(module)
+
+        self.mlp = nn.ModuleList(modules)
+
         self.concat_fc = nn.Sequential(nn.Linear(16 + 256, 256), nn.ReLU(inplace=True))
         self.relu = nn.ReLU(inplace=True)
 
@@ -197,32 +203,9 @@ class View(nn.Module):
         return x.view(*self.size)
 
 
-class ActionMask(nn.Module):
-    def __init__(self, order):
-        super(ActionMask, self).__init__()
-        move_mask = OrderedDict([(key, 0.0) for key in order])
-
-        for k in ["control", "end", "flag"]:
-            if k in order:
-                move_mask[k] = 1.0
-
-        move = torch.tensor([list(move_mask.values())])
-        paint = torch.ones(1, len(order))
-        self.register_buffer("move", move)
-        self.register_buffer("paint_minus_move", paint - move)
-        self.i = 2  # flag index
-
-    def forward(self, action):
-        flag = action[:, self.i : self.i + 1]
-        # equal to mask = (1.0 - flag) * self.move + flag * self.paint
-        mask = self.move + flag * self.paint_minus_move
-
-        return action * mask
-
-
-class MLP(nn.Module):
+class MaskMLP(nn.Module):
     def __init__(self, action_shape, grid_shape):
-        super(MLP, self).__init__()
+        super(MaskMLP, self).__init__()
         self.w, self.h = grid_shape
         modules = []
         for i, shape in enumerate(action_shape):
@@ -234,16 +217,13 @@ class MLP(nn.Module):
 
         self.mlp_list = nn.ModuleList(modules)
 
-    def __getitem__(self, idx):
-        return self.mlp_list[idx]
-
-    def forward(self, action):
+    def forward(self, action, action_mask):
         actions = action.unbind(dim=1)
         y = [
             self.mlp_list[i](action.unsqueeze(dim=1))
             for i, action in enumerate(actions)
         ]
-        return torch.cat(y, dim=1)
+        return torch.flatten(torch.stack(y, dim=1) * action_mask.unsqueeze(2), 1)
 
 
 class Location(nn.Module):
@@ -301,25 +281,6 @@ class ResBlock(nn.Module):
         residual = self.conv(x)
         residual += x
         return self.relu(residual)
-
-
-class Condition(nn.Module):
-    def __init__(self, model):
-        super(Condition, self).__init__()
-        self.model = model
-
-    def initial_action(self, batch_size=1):
-        return self.model.initial_action(batch_size)
-
-    def initial_state(self, batch_size=1):
-        return self.model.initial_state(batch_size)
-
-    def forward(self, input, core_state):
-        obs = input["obs"]
-        condition = input.pop("condition")
-        T, *_ = input["obs"].shape
-        input["obs"] = torch.cat([obs, condition.repeat(T, 1, 1, 1, 1)], dim=2)
-        return self.model(input, core_state)
 
 
 class Discriminator(nn.Module):

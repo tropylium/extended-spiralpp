@@ -87,8 +87,8 @@ def create_env(env_name, config):
 
     if frame_width != flags.canvas_width:
         env = env_wrapper.WarpFrame(env, width=frame_width, height=frame_width)
-    env = env_wrapper.wrap_pytorch(env)
-    return env
+
+    return env_wrapper.Base(env)
 
 
 def serve(env_name, config, server_address):
