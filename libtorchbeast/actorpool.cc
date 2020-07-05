@@ -446,6 +446,7 @@ class ActorPool {
 
           // agent_outputs must be a tuple/list.
           const TensorNest& action = agent_outputs.get_vector().front();
+
           action_pb.Clear();
 
           fill_nest_pb(

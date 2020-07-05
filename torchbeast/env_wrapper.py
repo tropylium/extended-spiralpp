@@ -62,7 +62,7 @@ class WarpFrame(gym.ObservationWrapper):
         return obs
 
 
-class Base(gym.ActionWrapper):
+class Base(gym.Wrapper):
     def __init__(self, env, noise_dim=10):
         super(Base, self).__init__(env)
         self.dim = noise_dim

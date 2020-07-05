@@ -365,7 +365,6 @@ def learn(
 
         index = done[1:].nonzero()
         index[:, 0] += 1
-
         episode_returns = (env_outputs.episode_return + env_outputs.reward)[
             env_outputs.done
         ]
