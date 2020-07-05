@@ -19,7 +19,12 @@ import multiprocessing as mp
 import time
 import ast
 
+import torchvision.transforms as transforms
+from torchvision.datasets import CelebA, Omniglot, MNIST
+from torch.utils.data import Subset
+
 from torchbeast import env_wrapper
+from torchbeast.core import datasets
 from libtorchbeast import rpcenv
 
 
@@ -67,6 +72,12 @@ parser.add_argument("--new_stroke_penalty", type=float, default=0.0,
                     help="penalty for new stroke")
 parser.add_argument("--stroke_length_penalty", type=float, default=0.0,
                     help="penalty for stroke length")
+parser.add_argument("--condition", action="store_true",
+                    help='condition flag')
+parser.add_argument("--dataset",
+                    help="Dataset name. MNIST, Omniglot, CelebA, CelebA-HQ is supported")
+parser.add_argument("--num_actors", type=int, metavar="N",
+                    help="Number of actors.")
 
 # yapf: enable
 
@@ -75,8 +86,17 @@ grid_width = 32
 
 
 def create_env(env_name, config):
-    keys = ["new_stroke_penalty", "stroke_length_penalty"]
-    new_stroke, stroke_length = (config.pop(k, None) for k in keys)
+    keys = [
+        "new_stroke_penalty",
+        "stroke_length_penalty",
+        "dataset",
+        "num_actors",
+        "actor_id",
+    ]
+    new_stroke, stroke_length, dataset, num_actors, actor_id = (
+        config.pop(k, None) for k in keys
+    )
+    condition = flags.condition
 
     env = env_wrapper.make_raw(env_name, config)
 
@@ -88,7 +108,18 @@ def create_env(env_name, config):
     if frame_width != flags.canvas_width:
         env = env_wrapper.WarpFrame(env, width=frame_width, height=frame_width)
 
-    return env_wrapper.Base(env)
+    env = env_wrapper.Base(env)
+
+    if condition:
+        per_actor = len(dataset) // num_actors
+        start = per_actor * actor_id
+        end = min(start + per_actor, len(dataset))
+
+        dataset = Subset(dataset, range(start, end + 1))
+
+        env = env_wrapper.ConcatTarget(env, dataset)
+
+    return env
 
 
 def serve(env_name, config, server_address):
@@ -132,11 +163,44 @@ if __name__ == "__main__":
             )
         )
 
+    if flags.condition:
+        tsfm = transforms.Compose(
+            [transforms.Resize((frame_width, frame_width)), transforms.ToTensor()]
+        )
+
+        dataset = flags.dataset
+
+        if dataset == "mnist":
+            dataset = MNIST(root="./", train=True, transform=tsfm, download=True)
+        elif dataset == "omniglot":
+            dataset = Omniglot(
+                root="./", background=True, transform=tsfm, download=True
+            )
+        elif dataset == "celeba":
+            dataset = CelebA(
+                root="./",
+                split="train",
+                target_type=None,
+                transform=tsfm,
+                download=True,
+            )
+        elif dataset == "celeba-hq":
+            dataset = datasets.CelebAHQ(
+                root="./", split="train", transform=tsfm, download=True
+            )
+        else:
+            raise NotImplementedError
+
+        config["dataset"] = dataset
+        config["num_actors"] = flags.num_actors
+
     if not flags.pipes_basename.startswith("unix:"):
         raise Exception("--pipes_basename has to be of the form unix:/some/path.")
 
     processes = []
     for i in range(flags.num_servers):
+        config["actor_id"] = i
+
         p = mp.Process(
             target=serve,
             args=(flags.env, config, f"{flags.pipes_basename}.{i}",),

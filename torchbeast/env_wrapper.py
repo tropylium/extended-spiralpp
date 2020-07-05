@@ -33,10 +33,10 @@ cv2.ocl.setUseOpenCL(False)
 
 
 class WarpFrame(gym.ObservationWrapper):
-    def __init__(self, env, width=64, height=64):
+    def __init__(self, env, height=64, width=64):
         super().__init__(env)
-        self._width = width
         self._height = height
+        self._width = width
 
         original_space = env.observation_space
         c = original_space.shape[-1]
@@ -70,7 +70,7 @@ class Base(gym.Wrapper):
 
         original_space = env.observation_space
         h, w, c = original_space.shape
-        new_space = gym.spaces.Box(low=0, high=255, shape=(c, h, w), dtype=np.uint8,)
+        new_space = gym.spaces.Box(low=0, high=255, shape=(c, h, w), dtype=np.uint8)
         self.observation_space = new_space
 
     def _convert_to_dict(self, action):
@@ -117,10 +117,21 @@ class ConcatTarget(gym.Wrapper):
 
     def __init__(self, env, dataset):
         super(ConcatTarget, self).__init__(env)
-        self.data = iter(dataset)
+        self.data = dataset
+        self.index = iter(self._get_indices())
+
+        original_space = env.observation_space
+        h, w, c = original_space.shape
+        new_space = gym.spaces.Box(
+            low=0, high=255, shape=(c * 2, h, w), dtype=np.uint8,
+        )
+        self.observation_space = new_space
+
+    def _get_indices(self):
+        return torch.randperm(len(self.data))
 
     def _concat(self, canvas):
-        return torch.cat([canvas, self.target])
+        return np.concatenate([canvas, self.target])
 
     def step(self, action):
         obs, reward, done, info = self.env.step(action)
@@ -128,6 +139,15 @@ class ConcatTarget(gym.Wrapper):
         return obs, reward, done, info
 
     def reset(self):
+        try:
+            index = next(self.index)
+        except StopIteration:
+            self.index = iter(self._get_indices())
+            index = next(self.index)
+
+        self.target = self.data[index][0].numpy()
+
         obs = self.env.reset()
         obs["canvas"] = self._concat(obs["canvas"])
+
         return obs

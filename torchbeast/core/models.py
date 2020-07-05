@@ -320,3 +320,20 @@ class Discriminator(nn.Module):
             return x
         else:
             return torch.sigmoid(x)
+
+
+class ComplementDiscriminator(Discriminator, nn.Module):
+    def __init__(self, obs_shape, power_iters):
+        super(ComplementDiscriminator, self).__init__(obs_shape, power_iters)
+
+    def forward(self, obs):
+        obs, target = obs.split(split_size=obs.shape[1] // 2, dim=1)
+        h, w = target.shape[2:]
+        obs[:, :, : h // 2, : w // 2] = target[:, :, h // 2 :, w // 2 :]
+        obs = torch.cat([obs, target], dim=1)
+
+        x = self.main(obs)
+        if self.training:
+            return x
+        else:
+            return torch.sigmoid(x)

@@ -404,54 +404,60 @@ def learn_D(
     plogger,
     lock=threading.Lock(),
 ):
-    for real, _ in dataloader:
-        obs = next(replay_queue)
-        replay_buffer.push(obs["canvas"].squeeze(0))
+    while True:
+        for real, _ in dataloader:
+            obs = next(replay_queue)
+            replay_buffer.push(obs["canvas"].squeeze(0))
 
-        if len(replay_buffer) < flags.batch_size:
-            continue
+            if len(replay_buffer) < flags.batch_size:
+                continue
 
-        fake = replay_buffer.sample(flags.batch_size)
+            fake = replay_buffer.sample(flags.batch_size)
 
-        lock.acquire()
-        optimizer.zero_grad()
+            if flags.condition:
+                real = real.repeat(1, 2, 1, 1)
 
-        D = D.train()
-        p_real = D(real).view(-1)
+            lock.acquire()
+            optimizer.zero_grad()
 
-        label = torch.full((flags.batch_size,), real_label, device=flags.learner_device)
-        real_loss = F.binary_cross_entropy_with_logits(p_real, label)
+            D = D.train()
+            p_real = D(real).view(-1)
 
-        real_loss.backward()
-        D_x = torch.sigmoid(p_real).mean()
+            label = torch.full(
+                (flags.batch_size,), real_label, device=flags.learner_device
+            )
+            real_loss = F.binary_cross_entropy_with_logits(p_real, label)
 
-        nn.utils.clip_grad_norm_(D.parameters(), flags.grad_norm_clipping)
+            real_loss.backward()
+            D_x = torch.sigmoid(p_real).mean()
 
-        D = D.train()
-        p_fake = D(fake).view(-1)
+            nn.utils.clip_grad_norm_(D.parameters(), flags.grad_norm_clipping)
 
-        label.fill_(fake_label)
-        fake_loss = F.binary_cross_entropy_with_logits(p_fake, label)
+            D = D.train()
+            p_fake = D(fake).view(-1)
 
-        fake_loss.backward()
-        D_G_z1 = torch.sigmoid(p_fake).mean()
+            label.fill_(fake_label)
+            fake_loss = F.binary_cross_entropy_with_logits(p_fake, label)
 
-        loss = real_loss + fake_loss
+            fake_loss.backward()
+            D_G_z1 = torch.sigmoid(p_fake).mean()
 
-        nn.utils.clip_grad_norm_(D.parameters(), flags.grad_norm_clipping)
+            loss = real_loss + fake_loss
 
-        optimizer.step()
-        scheduler.step()
+            nn.utils.clip_grad_norm_(D.parameters(), flags.grad_norm_clipping)
 
-        D_eval.load_state_dict(D.state_dict())
+            optimizer.step()
+            scheduler.step()
 
-        stats["D_loss"] = loss.item()
-        stats["fake_loss"] = fake_loss.item()
-        stats["real_loss"] = real_loss.item()
-        stats["D_x"] = D_x.item()
-        stats["D_G_z1"] = D_G_z1.item()
+            D_eval.load_state_dict(D.state_dict())
 
-        lock.release()
+            stats["D_loss"] = loss.item()
+            stats["fake_loss"] = fake_loss.item()
+            stats["real_loss"] = real_loss.item()
+            stats["D_x"] = D_x.item()
+            stats["D_G_z1"] = D_G_z1.item()
+
+            lock.release()
 
 
 BRUSHES_BASEDIR = os.path.join(os.getcwd(), "third_party/mypaint-brushes-1.3.0")
@@ -571,10 +577,10 @@ def train(flags):
     env = env_wrapper.Base(env)
 
     obs_shape = env.observation_space.shape
+
     if flags.condition:
         c, h, w = obs_shape
-        c *= 2
-        obs_shape = (c, h, w)
+        obs_shape = (c * 2, h, w)
 
     action_shape = env.action_space.nvec.tolist()
     order = env.order
@@ -596,7 +602,10 @@ def train(flags):
     )
     actor_model.to(device=flags.actor_device)
 
-    D = models.Discriminator(obs_shape, flags.power_iters)
+    if flags.condition:
+        D = models.ComplementDiscriminator(obs_shape, flags.power_iters)
+    else:
+        D = models.Discriminator(obs_shape, flags.power_iters)
     D.to(device=flags.learner_device)
 
     D_eval = models.Discriminator(obs_shape, flags.power_iters)
@@ -617,9 +626,6 @@ def train(flags):
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
     D_scheduler = torch.optim.lr_scheduler.LambdaLR(D_optimizer, lr_lambda)
 
-    C, H, W = obs_shape
-    if flags.condition:
-        C //= 2
     # The ActorPool that will run `flags.num_actors` many loops.
     actors = actorpool.ActorPool(
         unroll_length=flags.unroll_length,
@@ -643,7 +649,6 @@ def train(flags):
 
     actorpool_thread = threading.Thread(target=run, name="actorpool-thread")
 
-    c, h, w = obs_shape
     tsfm = transforms.Compose([transforms.Resize((h, w)), transforms.ToTensor()])
 
     dataset = flags.dataset
@@ -809,177 +814,7 @@ def train(flags):
 
 
 def test(flags):
-    if flags.xpid is None:
-        checkpointpath = "./latest/model.tar"
-    else:
-        checkpointpath = os.path.expandvars(
-            os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "model.tar"))
-        )
-
-    config = dict(
-        episode_length=flags.episode_length,
-        canvas_width=flags.canvas_width,
-        grid_width=grid_width,
-        brush_sizes=flags.brush_sizes,
-    )
-
-    if flags.dataset == "celeba" or flags.dataset == "celeba-hq":
-        use_color = True
-    else:
-        use_color = False
-
-    if flags.env_type == "fluid":
-        env_name = "Fluid"
-        config["shaders_basedir"] = SHADERS_BASEDIR
-    elif flags.env_type == "libmypaint":
-        env_name = "Libmypaint"
-        config.update(
-            dict(
-                brush_type=flags.brush_type,
-                use_color=use_color,
-                use_pressure=flags.use_pressure,
-                use_alpha=False,
-                background="white",
-                brushes_basedir=BRUSHES_BASEDIR,
-            )
-        )
-
-    if flags.use_compound:
-        env_name += "-v1"
-        config.update(
-            dict(
-                new_stroke_penalty=flags.new_stroke_penalty,
-                stroke_length_penalty=flags.stroke_length_penalty,
-            )
-        )
-    else:
-        env_name += "-v0"
-
-    env = env_wrapper.make_raw(env_name, config)
-    if frame_width != flags.canvas_width:
-        env = env_wrapper.WarpFrame(env, height=frame_width, width=frame_width)
-    env = env_wrapper.wrap_pytorch(env)
-    env = env_wrapper.AddDim(env)
-
-    obs_shape = env.observation_space.shape
-    if flags.condition:
-        c, h, w = obs_shape
-        c *= 2
-        obs_shape = (c, h, w)
-
-    action_shape = env.action_space.nvec.tolist()
-    order = env.order
-
-    model = models.Net(
-        obs_shape=obs_shape,
-        action_shape=action_shape,
-        grid_shape=(grid_width, grid_width),
-        order=order,
-    )
-    if flags.condition:
-        model = models.Condition(model)
-    model.eval()
-
-    D = models.Discriminator(obs_shape, flags.power_iters)
-    if flags.condition:
-        D = models.Conditional(D)
-    D.eval()
-
-    checkpoint = torch.load(checkpointpath, map_location="cpu")
-    model.load_state_dict(checkpoint["model_state_dict"])
-    D.load_state_dict(checkpoint["D_state_dict"])
-
-    if flags.condition:
-        from random import randrange
-
-        c, h, w = obs_shape
-        tsfm = transforms.Compose([transforms.Resize((h, w)), transforms.ToTensor()])
-        dataset = flags.dataset
-
-        if dataset == "mnist":
-            dataset = MNIST(root="./", train=True, transform=tsfm, download=True)
-        elif dataset == "omniglot":
-            dataset = Omniglot(
-                root="./", background=True, transform=tsfm, download=True
-            )
-        elif dataset == "celeba":
-            dataset = CelebA(
-                root="./",
-                split="train",
-                target_type=None,
-                transform=tsfm,
-                download=True,
-            )
-        elif dataset == "celeba-hq":
-            dataset = datasets.CelebAHQ(
-                root="./", split="train", transform=tsfm, download=True
-            )
-        else:
-            raise NotImplementedError
-
-        condition = dataset[randrange(len(dataset))].view((1, 1) + obs_shape)
-    else:
-        condition = None
-
-    frame = env.reset()
-    action = model.initial_action()
-    agent_state = model.initial_state()
-    done = torch.tensor(False).view(1, 1)
-    rewards = []
-    frames = [frame]
-
-    for i in range(flags.episode_length - 1):
-        if flags.mode == "test_render":
-            env.render()
-        noise = torch.randn(1, 1, 10)
-        agent_outputs, agent_state = model(
-            dict(
-                obs=frame, condition=condition, action=action, noise=noise, done=done,
-            ),
-            agent_state,
-        )
-        action, *_ = agent_outputs
-        frame, reward, done, _ = env.step(action)
-
-        rewards.append(reward)
-        frames.append(frame)
-
-    reward = torch.cat(rewards)
-    frame = torch.cat(frames)
-
-    if flags.use_tca:
-        frame = torch.flatten(frame, 0, 1)
-        if flags.condition:
-            condition = torch.flatten(condition, 0, 1)
-    else:
-        frame = frame[-1]
-        if flags.condition:
-            condition = condition[-1]
-
-    D = D.eval()
-    with torch.no_grad():
-        if flags.condition:
-            p = D(frame, condition).view(-1, 1)
-        else:
-            p = D(frame).view(-1, 1)
-
-        if flags.use_tca:
-            d_reward = p[1:] - p[:-1]
-            reward = reward[1:] + d_reward
-        else:
-            reward[-1] = reward[-1] + p
-            reward = reward[1:]
-
-            # empty condition
-            condition = None
-
-    logging.info(
-        "Episode ended after %d steps. Final reward: %.4f. Episode reward: %.4f,",
-        flags.episode_length,
-        reward[-1].item(),
-        reward.sum(),
-    )
-    env.close()
+    pass
 
 
 def main(flags):
@@ -1037,6 +872,15 @@ def main(flags):
 
         if flags.use_pressure:
             command.append("--use_pressure")
+
+        if flags.condition:
+            command.extend(
+                [
+                    "--condition",
+                    f"--dataset={flags.dataset}",
+                    f"--num_actors={flags.num_actors}",
+                ]
+            )
 
         logging.info("Starting servers with command: " + " ".join(command))
         server_proc = subprocess.Popen(command)
