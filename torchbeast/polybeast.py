@@ -402,7 +402,6 @@ def learn_D(
     scheduler,
     stats,
     plogger,
-    lock=threading.Lock(),
 ):
     while True:
         for real, _ in dataloader:
@@ -417,7 +416,6 @@ def learn_D(
             if flags.condition:
                 real = real.repeat(1, 2, 1, 1)
 
-            lock.acquire()
             optimizer.zero_grad()
 
             D = D.train()
@@ -456,8 +454,6 @@ def learn_D(
             stats["real_loss"] = real_loss.item()
             stats["D_x"] = D_x.item()
             stats["D_G_z1"] = D_G_z1.item()
-
-            lock.release()
 
 
 BRUSHES_BASEDIR = os.path.join(os.getcwd(), "third_party/mypaint-brushes-1.3.0")
@@ -608,7 +604,10 @@ def train(flags):
         D = models.Discriminator(obs_shape, flags.power_iters)
     D.to(device=flags.learner_device)
 
-    D_eval = models.Discriminator(obs_shape, flags.power_iters)
+    if flags.condition:
+        D_eval = models.ComplementDiscriminator(obs_shape, flags.power_iters)
+    else:
+        D_eval = models.Discriminator(obs_shape, flags.power_iters)
     D_eval = D_eval.to(device=flags.learner_device)
 
     optimizer = optim.Adam(model.parameters(), lr=flags.policy_learning_rate)
@@ -649,7 +648,7 @@ def train(flags):
 
     actorpool_thread = threading.Thread(target=run, name="actorpool-thread")
 
-    tsfm = transforms.Compose([transforms.Resize((h, w)), transforms.ToTensor()])
+    tsfm = transforms.Compose([transforms.Resize(obs_shape[1:]), transforms.ToTensor()])
 
     dataset = flags.dataset
 

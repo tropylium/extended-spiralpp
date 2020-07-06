@@ -325,14 +325,15 @@ class Discriminator(nn.Module):
 class ComplementDiscriminator(Discriminator, nn.Module):
     def __init__(self, obs_shape, power_iters):
         super(ComplementDiscriminator, self).__init__(obs_shape, power_iters)
+        c, h, w = obs_shape
+        left = torch.ones(1, c // 2, h, w // 2)
+        right = torch.zeros(1, c // 2, h, w // 2)
+        mask = torch.cat([left, right], dim=-1)
+        mask = torch.cat([1 - mask, mask], dim=1)
+        self.register_buffer("mask", mask)
 
     def forward(self, obs):
-        obs, target = obs.split(split_size=obs.shape[1] // 2, dim=1)
-        h, w = target.shape[2:]
-        obs[:, :, : h // 2, : w // 2] = target[:, :, h // 2 :, w // 2 :]
-        obs = torch.cat([obs, target], dim=1)
-
-        x = self.main(obs)
+        x = self.main(obs * self.mask)
         if self.training:
             return x
         else:
