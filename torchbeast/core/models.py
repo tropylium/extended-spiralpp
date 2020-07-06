@@ -20,40 +20,58 @@ import nest
 
 
 class Net(nn.Module):
-    def __init__(self, obs_shape, action_shape, grid_shape, order):
+    def __init__(self, obs_space, action_space, grid_shape):
         super(Net, self).__init__()
-        self._action_shape = action_shape
-        self._order = order
-        self._num_actions = len(order)
+        self._num_actions = len(action_space.nvec)
 
-        c, h, w = obs_shape
+        c, h, w = obs_space.shape
+        assert h == 64 and w == 64
+
         self.register_buffer("grid", self._grid(h, w))
 
-        self.conv5x5 = nn.Conv2d(c + 2, 32, 5, 1, 2)
+        self.obs = nn.Conv2d(c + 2, 32, 5, 1, 2)
 
-        self.mask_mlp = MaskMLP(action_shape, grid_shape)
-        self.action_fc = nn.Sequential(
-            Linear(16 * len(action_shape), 64, 32), View(-1, 32, 1, 1),
+        self.mask_mlp = MaskMLP(action_space, grid_shape)
+        self.action = nn.Sequential(
+            nn.Linear(16 * self._num_actions, 64),
+            nn.ReLU(inplace=True),
+            nn.Linear(64, 32),
+            nn.ReLU(inplace=True),
+            nn.Linear(32, 32),
+            nn.ReLU(inplace=True),
         )
 
-        self.fc = Linear(10, 64, 32)
+        self.noise = nn.Sequential(
+            nn.Linear(10, 64),
+            nn.ReLU(inplace=True),
+            nn.Linear(64, 32),
+            nn.ReLU(inplace=True),
+            nn.Linear(32, 32),
+            nn.ReLU(inplace=True),
+        )
+
         self.relu = nn.ReLU(inplace=True)
 
-        self.conv = nn.Sequential(
+        self.base = nn.Sequential(
+            # conv
             nn.Conv2d(32, 32, 4, 2, 1),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
             nn.Conv2d(32, 32, 4, 2, 1),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
             nn.Conv2d(32, 32, 4, 2, 1),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
+            # resblock
+            *[ResBlock(32) for _ in range(8)],
+            # flatten_fc
+            nn.Flatten(1, 3),
+            nn.Linear(8 * 8 * 32, 256),
+            # relu
+            nn.ReLU(inplace=True),
         )
 
-        self.resblock = nn.Sequential(*[ResBlock(32) for _ in range(8)])
-
-        self.flatten_fc = nn.Sequential(nn.Flatten(1, 3), nn.Linear(8 * 8 * 32, 256))
-
         self.lstm = nn.LSTM(256, 256, num_layers=1)
-        self.policy = Decoder(order, action_shape, grid_shape)
+
+        self.policy = Decoder(action_space, grid_shape)
         self.baseline = nn.Linear(256, 1)
 
     def _grid(self, w, h):
@@ -67,9 +85,6 @@ class Net(nn.Module):
 
         return torch.cat([y_grid, x_grid], dim=1)
 
-    def initial_action(self, batch_size=1):
-        return torch.zeros(1, batch_size, self._num_actions).long()
-
     def initial_state(self, batch_size=1):
         return tuple(torch.zeros(1, batch_size, 256) for _ in range(2))
 
@@ -78,63 +93,66 @@ class Net(nn.Module):
         grid = self.grid.repeat(T * B, 1, 1, 1)
 
         notdone = (~done).float()
-        action = torch.flatten(obs["prev_action"] * notdone.unsqueeze(dim=2), 0, 1)
-        action_mask = torch.flatten(obs["action_mask"], 0, 1)
-        canvas = torch.flatten(obs["canvas"].float(), 0, 1)
-        noise = torch.flatten(obs["noise_sample"], 0, 1)
+        obs["prev_action"] = obs["prev_action"] * notdone.unsqueeze(dim=2)
 
-        spatial = self.conv5x5(torch.cat([canvas, grid], dim=1))
-        noise_embedding = self.fc(noise).view(-1, 32, 1, 1)
-        mlp = self.action_fc(self.mask_mlp(action, action_mask))
+        obs = nest.map(lambda t: torch.flatten(t, 0, 1), obs)
 
-        embedding = self.relu(spatial + noise_embedding + mlp)
+        canvas, action_mask, action, noise = (
+            obs[k] for k in ["canvas", "action_mask", "prev_action", "noise_sample"]
+        )
 
-        h = self.conv(embedding)
-        h = self.resblock(h)
-        h = self.flatten_fc(h)
-        h = self.relu(h)
+        features = self.obs(torch.cat([canvas, grid], dim=1))
 
-        core_input = h.view(T, B, 256)
+        condition = (
+            self.noise(noise) + self.action(self.mask_mlp(action, action_mask))
+        ).view(-1, 32, 1, 1)
+
+        embedding = self.base(self.relu(features + condition)).view(T, B, 256)
+
         core_output_list = []
-        for input, nd in zip(core_input.unbind(), notdone.unbind()):
+        for core_input, nd in zip(embedding.unbind(), notdone.unbind()):
             nd = nd.view(1, -1, 1)
             core_state = nest.map(nd.mul, core_state)
-            output, core_state = self.lstm(input.unsqueeze(0), core_state)
+            output, core_state = self.lstm(core_input.unsqueeze(0), core_state)
             core_output_list.append(output)
-        core_output = torch.flatten(torch.cat(core_output_list), 0, 1)
+        seed = torch.flatten(torch.cat(core_output_list), 0, 1)
 
-        action, policy_logits = self.policy(core_output, action)
-        baseline = self.baseline(core_output)
+        action, logits = self.policy(seed, action)
+        baseline = self.baseline(seed)
 
         action = action.view(T, B, self._num_actions)
         baseline = baseline.view(T, B)
-        policy_logits = nest.map(lambda t: t.view(T, B, -1), policy_logits)
+        logits = nest.map(lambda t: t.view(T, B, -1), logits)
 
-        return (action, policy_logits, baseline), core_state
+        return (action, logits, baseline), core_state
 
 
 class Decoder(nn.Module):
     SPATIAL_ACTIONS = ["end", "control"]
 
-    def __init__(self, order, action_shape, grid_shape):
+    def __init__(self, action_space, grid_shape):
         super(Decoder, self).__init__()
-        self.num_actions = len(order)
+        self.num_actions = len(action_space.nvec)
         modules = []
+        action_space = action_space.nvec
         for i in range(self.num_actions):
             if i < 2:
-                module = [View(-1, 16, 4, 4)]
-                module.append(nn.ConvTranspose2d(16, 32, 4, 2, 1))
-                module.extend([ResBlock(32) for i in range(8)])
-                module.extend([nn.ConvTranspose2d(32, 32, 4, 2, 1) for i in range(2)])
-                module.extend([nn.Conv2d(32, 1, 3, 1, 1), View(-1, 32 * 32)])
-                module = nn.Sequential(*module)
+                module = nn.Sequential(
+                    View(-1, 16, 4, 4),
+                    nn.ConvTranspose2d(16, 32, 4, 2, 1),
+                    *[ResBlock(32) for i in range(8)],
+                    nn.ConvTranspose2d(32, 32, 4, 2, 1),
+                    nn.ConvTranspose2d(32, 32, 4, 2, 1),
+                    nn.Conv2d(32, 1, 3, 1, 1),
+                    View(-1, 32 * 32),
+                )
             else:
-                module = nn.Linear(256, action_shape[i])
+                module = nn.Linear(256, action_space[i])
             modules.append(module)
         self.decode = nn.ModuleList(modules)
 
         modules = []
-        for i, shape in enumerate(action_shape):
+        for i, shape in enumerate(action_space):
             if i < 2:
                 module = Location(grid_shape)
             else:
@@ -181,13 +199,13 @@ class Decoder(nn.Module):
 class ConvDecoder(nn.Module):
     def __init__(self):
         super(ConvDecoder, self).__init__()
-        modules = [nn.ConvTranspose2d(16, 32, 4, 2, 1)]
-        for i in range(8):
-            modules.append(ResBlock(32))
-        for i in range(2):
-            modules.append(nn.ConvTranspose2d(32, 32, 4, 2, 1))
-        modules.append(nn.Conv2d(32, 1, 3, 1, 1))
-        self.conv = nn.Sequential(*modules)
+        self.conv = nn.Sequential(
+            nn.ConvTranspose2d(16, 32, 4, 2, 1),
+            *[ResBlock(32) for i in range(8)],
+            nn.ConvTranspose2d(32, 32, 4, 2, 1),
+            nn.ConvTranspose2d(32, 32, 4, 2, 1),
+            nn.Conv2d(32, 1, 3, 1, 1),
+        )
 
     def forward(self, z):
         output = self.conv(z.view(-1, 16, 4, 4))
@@ -204,11 +222,11 @@ class View(nn.Module):
 
 
 class MaskMLP(nn.Module):
-    def __init__(self, action_shape, grid_shape):
+    def __init__(self, action_space, grid_shape):
         super(MaskMLP, self).__init__()
         self.w, self.h = grid_shape
         modules = []
-        for i, shape in enumerate(action_shape):
+        for i, shape in enumerate(action_space.nvec):
             if i < 2:
                 module = Location(grid_shape)
             else:
@@ -284,9 +302,9 @@ class ResBlock(nn.Module):
 
 
 class Discriminator(nn.Module):
-    def __init__(self, obs_shape, power_iters):
+    def __init__(self, obs_space, power_iters):
         super(Discriminator, self).__init__()
-        c, h, w = obs_shape
+        c, h, w = obs_space.shape
 
         ndf = 64
         self.main = nn.Sequential(
@@ -323,9 +341,9 @@ class Discriminator(nn.Module):
 
 
 class ComplementDiscriminator(Discriminator, nn.Module):
-    def __init__(self, obs_shape, power_iters):
-        super(ComplementDiscriminator, self).__init__(obs_shape, power_iters)
-        c, h, w = obs_shape
+    def __init__(self, obs_space, power_iters):
+        super(ComplementDiscriminator, self).__init__(obs_space, power_iters)
+        c, h, w = obs_space.shape
         left = torch.ones(1, c // 2, h, w // 2)
         right = torch.zeros(1, c // 2, h, w // 2)
         mask = torch.cat([left, right], dim=-1)

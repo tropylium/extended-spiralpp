@@ -43,7 +43,6 @@ from torchbeast.core import vtrace
 from torchbeast.core import models
 from torchbeast.core import datasets
 
-
 # yapf: disable
 parser = argparse.ArgumentParser(description="PyTorch Scalable Agent")
 
@@ -380,7 +379,7 @@ def learn(
         if flags.condition:
             C = final_render.shape[1] // 2
             stats["l2_loss"] = F.mse_loss(
-                final_render[:, :C, ...], final_render[:, :C, ...]
+                final_render[:, :C, ...], final_render[:, C:, ...]
             ).item()
 
         plogger.log(stats)
@@ -405,14 +404,6 @@ def learn_D(
 ):
     while True:
         for real, _ in dataloader:
-            obs = next(replay_queue)
-            replay_buffer.push(obs["canvas"].squeeze(0))
-
-            if len(replay_buffer) < flags.batch_size:
-                continue
-
-            fake = replay_buffer.sample(flags.batch_size)
-
             if flags.condition:
                 real = real.repeat(1, 2, 1, 1)
 
@@ -430,6 +421,15 @@ def learn_D(
             D_x = torch.sigmoid(p_real).mean()
 
             nn.utils.clip_grad_norm_(D.parameters(), flags.grad_norm_clipping)
+
+            obs = next(replay_queue)
+            replay_buffer.push(obs["canvas"].squeeze(0))
+
+            while len(replay_buffer) < flags.batch_size:
+                obs = next(replay_queue)
+                replay_buffer.push(obs["canvas"].squeeze(0))
+
+            fake = replay_buffer.sample(flags.batch_size)
 
             D = D.train()
             p_fake = D(fake).view(-1)
@@ -570,44 +570,41 @@ def train(flags):
     env = env_wrapper.make_raw(env_name, config)
     if frame_width != flags.canvas_width:
         env = env_wrapper.WarpFrame(env, height=frame_width, width=frame_width)
+
     env = env_wrapper.Base(env)
 
-    obs_shape = env.observation_space.shape
-
     if flags.condition:
-        c, h, w = obs_shape
-        obs_shape = (c * 2, h, w)
+        env = env_wrapper.ConcatTarget(env, None)
 
-    action_shape = env.action_space.nvec.tolist()
-    order = env.order
+    obs_space = env.observation_space
+
+    action_space = env.action_space
     env.close()
 
     model = models.Net(
-        obs_shape=obs_shape,
-        action_shape=action_shape,
+        obs_space=obs_space,
+        action_space=action_space,
         grid_shape=(grid_width, grid_width),
-        order=order,
     )
     model = model.to(device=flags.learner_device)
 
     actor_model = models.Net(
-        obs_shape=obs_shape,
-        action_shape=action_shape,
+        obs_space=obs_space,
+        action_space=action_space,
         grid_shape=(grid_width, grid_width),
-        order=order,
     )
     actor_model.to(device=flags.actor_device)
 
     if flags.condition:
-        D = models.ComplementDiscriminator(obs_shape, flags.power_iters)
+        D = models.ComplementDiscriminator(obs_space, flags.power_iters)
     else:
-        D = models.Discriminator(obs_shape, flags.power_iters)
+        D = models.Discriminator(obs_space, flags.power_iters)
     D.to(device=flags.learner_device)
 
     if flags.condition:
-        D_eval = models.ComplementDiscriminator(obs_shape, flags.power_iters)
+        D_eval = models.ComplementDiscriminator(obs_space, flags.power_iters)
     else:
-        D_eval = models.Discriminator(obs_shape, flags.power_iters)
+        D_eval = models.Discriminator(obs_space, flags.power_iters)
     D_eval = D_eval.to(device=flags.learner_device)
 
     optimizer = optim.Adam(model.parameters(), lr=flags.policy_learning_rate)
@@ -648,7 +645,9 @@ def train(flags):
 
     actorpool_thread = threading.Thread(target=run, name="actorpool-thread")
 
-    tsfm = transforms.Compose([transforms.Resize(obs_shape[1:]), transforms.ToTensor()])
+    tsfm = transforms.Compose(
+        [transforms.Resize(obs_space.shape[1:]), transforms.ToTensor()]
+    )
 
     dataset = flags.dataset
 
@@ -820,15 +819,10 @@ def main(flags):
     if not flags.pipes_basename.startswith("unix:"):
         raise Exception("--pipes_basename has to be of the form unix:/some/path.")
 
-    if flags.mode != "train":
-        flags.start_servers = False
-
     if flags.start_servers:
+        env_type = {"fluid": "Fluid", "libmypaint": "Libmypaint"}
 
-        if flags.env_type == "fluid":
-            env_name = "Fluid"
-        elif flags.env_type == "libmypaint":
-            env_name = "Libmypaint"
+        env_name = env_type[flags.env_type]
 
         if flags.use_compound:
             env_name += "-v1"
@@ -904,7 +898,5 @@ def main(flags):
 
 
 if __name__ == "__main__":
-    torch.backends.cudnn.benchmark = True
-
     flags = parser.parse_args()
     main(flags)

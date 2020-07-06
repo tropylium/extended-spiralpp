@@ -24,12 +24,13 @@
 # and slightly modified by (c) Facebook, Inc. and its affiliates.
 # 2 May 2020 Modified by urw7rs
 
-import torch
 import numpy as np
 import gym
 import cv2
 
 cv2.ocl.setUseOpenCL(False)
+
+from torch.utils.data import DataLoader
 
 
 class WarpFrame(gym.ObservationWrapper):
@@ -117,18 +118,17 @@ class ConcatTarget(gym.Wrapper):
 
     def __init__(self, env, dataset):
         super(ConcatTarget, self).__init__(env)
-        self.data = dataset
-        self.index = iter(self._get_indices())
+        if dataset is not None:
+            self.dataloader = DataLoader(dataset, shuffle=True, pin_memory=True)
+            self.iterator = iter(self.dataloader)
 
         original_space = env.observation_space
-        h, w, c = original_space.shape
+
+        c, h, w = original_space.shape
         new_space = gym.spaces.Box(
             low=0, high=255, shape=(c * 2, h, w), dtype=np.uint8,
         )
         self.observation_space = new_space
-
-    def _get_indices(self):
-        return torch.randperm(len(self.data))
 
     def _concat(self, canvas):
         return np.concatenate([canvas, self.target])
@@ -140,12 +140,12 @@ class ConcatTarget(gym.Wrapper):
 
     def reset(self):
         try:
-            index = next(self.index)
+            target, _ = next(self.iterator)
         except StopIteration:
-            self.index = iter(self._get_indices())
-            index = next(self.index)
+            self.iterator = iter(self.dataloader)
+            target, _ = next(self.iterator)
 
-        self.target = self.data[index][0].numpy()
+        self.target = target.squeeze(0).numpy()
 
         obs = self.env.reset()
         obs["canvas"] = self._concat(obs["canvas"])
