@@ -230,7 +230,7 @@ def inference(flags, inference_batcher, model, lock=threading.Lock()):
             )
 
             with lock:
-                model = model.eval()
+                model = model
                 outputs = model(obs, done, agent_state)
 
             outputs = nest.map(lambda t: t.cpu(), outputs)
@@ -309,7 +309,6 @@ def learn(
 
         actor_outputs = AgentOutput._make(actor_outputs)
 
-        model = model.train()
         learner_outputs, agent_state = model(obs, done, initial_agent_state)
 
         # Take final value function slice for bootstrapping.
@@ -417,7 +416,6 @@ def learn_D(
 
             optimizer.zero_grad()
 
-            D = D.train()
             p_real = D(real).view(-1)
 
             label = torch.full(
@@ -441,7 +439,6 @@ def learn_D(
                 flags.learner_device, non_blocking=True
             )
 
-            D = D.train()
             p_fake = D(fake).view(-1)
 
             label.fill_(fake_label)
@@ -602,7 +599,7 @@ def train(flags):
         obs_space=obs_space,
         action_space=action_space,
         grid_shape=(grid_width, grid_width),
-    )
+    ).eval()
     actor_model.to(device=flags.actor_device)
 
     if flags.condition:
@@ -615,7 +612,7 @@ def train(flags):
         D_eval = models.ComplementDiscriminator(obs_space, flags.power_iters)
     else:
         D_eval = models.Discriminator(obs_space, flags.power_iters)
-    D_eval = D_eval.to(device=flags.learner_device)
+    D_eval = D_eval.to(device=flags.learner_device).eval()
 
     optimizer = optim.Adam(model.parameters(), lr=flags.policy_learning_rate)
     D_optimizer = optim.Adam(
@@ -713,7 +710,7 @@ def train(flags):
                 learner_queue,
                 model,
                 actor_model,
-                D_eval.eval(),
+                D_eval,
                 optimizer,
                 scheduler,
                 stats,
@@ -833,7 +830,6 @@ def main(flags):
         env_type = {"fluid": "Fluid", "libmypaint": "Libmypaint"}
 
         env_name = env_type[flags.env_type]
-
         if flags.use_compound:
             env_name += "-v1"
         else:
@@ -854,13 +850,14 @@ def main(flags):
             f"--stroke_length_penalty={flags.stroke_length_penalty}",
         ]
 
-        if flags.env_type == "fluid":
+        if env_type == "fluid":
             assert flags.dataset != "omniglot" and flags.dataset != "mnist"
 
             command.extend(
                 [f"--env={env_name}", f"--shaders_basedir={SHADERS_BASEDIR}"]
             )
-        elif flags.env_type == "libmypaint":
+
+        elif env_type == "libmypaint":
             if flags.dataset == "celeba" or flags.dataset == "celeba-hq":
                 command.append("--use_color")
 
