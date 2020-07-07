@@ -65,7 +65,7 @@ parser.add_argument("--env_type", type=str, default="libmypaint",
                     help="Environment. Ignored if --no_start_servers is passed.")
 parser.add_argument("--episode_length", type=int, default=20,
                     help="Set epiosde length")
-parser.add_argument("--canvas_width", type=int, default=256,
+parser.add_argument("--canvas_width", type=int, default=256, metavar="W",
                     help="Set canvas render width")
 parser.add_argument("--brush_type", type=str, default="classic/dry_brush",
                     help="Set brush type from brush dir")
@@ -108,7 +108,7 @@ parser.add_argument("--condition", action="store_true",
                     help='condition flag')
 parser.add_argument("--use_tca", action="store_true",
                     help="temporal credit assignment flag")
-parser.add_argument("--power_iters", default=20, type=int,
+parser.add_argument("--power_iters", default=20, type=int, metavar="N",
                     help="Spectral normalization power iterations")
 parser.add_argument("--dataset", default="celeba-hq",
                     help="Dataset name. MNIST, Omniglot, CelebA, CelebA-HQ is supported")
@@ -370,12 +370,16 @@ def learn(
 
         index = done[1:].nonzero()
         index[:, 0] += 1
-        episode_returns = (env_outputs.episode_return + env_outputs.reward)[
-            env_outputs.done
-        ]
+        episode_returns = env_outputs.episode_return[env_outputs.done]
+        if flags.condition:
+            discriminator_returns = env_outputs.reward[env_outputs.done]
+        else:
+            discriminator_returns = env_outputs.reward
+
         stats["step"] = stats.get("step", 0) + flags.unroll_length * flags.batch_size
         stats["episode_returns"] = tuple(episode_returns.cpu().numpy())
         stats["mean_episode_return"] = torch.mean(episode_returns).item()
+        stats["mean_discriminator_returns"] = torch.mean(discriminator_returns).item()
         stats["total_loss"] = total_loss.item()
         stats["pg_loss"] = pg_loss.item()
         stats["baseline_loss"] = baseline_loss.item()
