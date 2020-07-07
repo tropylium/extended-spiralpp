@@ -49,7 +49,7 @@ parser.add_argument("--env_type", type=str, default="libmypaint",
                     help="Environment. Ignored if --no_start_servers is passed.")
 parser.add_argument("--episode_length", type=int, default=20,
                     help="Set epiosde length")
-parser.add_argument("--canvas_width", type=int, default=256,
+parser.add_argument("--canvas_width", type=int, default=256, metavar="W",
                     help="Set canvas render width")
 parser.add_argument("--brush_type", type=str, default="classic/dry_brush",
                     help="Set brush type from brush dir")
