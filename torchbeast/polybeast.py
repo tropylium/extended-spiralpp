@@ -341,6 +341,13 @@ def learn(
             bootstrap_value=bootstrap_value,
         )
 
+        vtrace_returns = nest.map(
+            lambda t: t.to(device=flags.learner_device, non_blocking=True),
+            vtrace_returns,
+        )
+
+        vtrace_returns = vtrace.VTraceFromLogitsReturns._make(vtrace_returns)
+
         pg_loss = compute_policy_gradient_loss(
             learner_outputs.policy_logits, action, vtrace_returns.pg_advantages,
         )
@@ -376,10 +383,9 @@ def learn(
         stats["entropy_loss"] = entropy_loss.item()
         stats["learner_queue_size"] = learner_queue.size()
 
-        if flags.condition:
-            C = final_render.shape[1] // 2
+        if flags.condition and final_render_exists:
             stats["l2_loss"] = F.mse_loss(
-                final_render[:, :C, ...], final_render[:, C:, ...]
+                *final_render.split(split_size=final_render.shape[1] // 2, dim=1)
             ).item()
 
         plogger.log(stats)
@@ -404,6 +410,8 @@ def learn_D(
 ):
     while True:
         for real, _ in dataloader:
+            real = real.to(flags.learner_device, non_blocking=True)
+
             if flags.condition:
                 real = real.repeat(1, 2, 1, 1)
 
@@ -429,7 +437,9 @@ def learn_D(
                 obs = next(replay_queue)
                 replay_buffer.push(obs["canvas"].squeeze(0))
 
-            fake = replay_buffer.sample(flags.batch_size)
+            fake = replay_buffer.sample(flags.batch_size).to(
+                flags.learner_device, non_blocking=True
+            )
 
             D = D.train()
             p_fake = D(fake).view(-1)
