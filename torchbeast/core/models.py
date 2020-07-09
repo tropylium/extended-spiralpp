@@ -20,18 +20,18 @@ import nest
 
 
 class Net(nn.Module):
-    def __init__(self, obs_space, action_space, grid_shape):
+    def __init__(self, obs_shape, action_shape, grid_shape):
         super(Net, self).__init__()
-        self._num_actions = len(action_space.nvec)
+        self._num_actions = len(action_shape)
 
-        c, h, w = obs_space.shape
+        c, h, w = obs_shape
         assert h == 64 and w == 64
 
         self.register_buffer("grid", self._grid(h, w))
 
         self.obs = nn.Conv2d(c + 2, 32, 5, 1, 2)
 
-        self.mask_mlp = MaskMLP(action_space, grid_shape)
+        self.mask_mlp = MaskMLP(action_shape, grid_shape)
         self.action = nn.Sequential(
             nn.Linear(16 * self._num_actions, 64),
             nn.ReLU(inplace=True),
@@ -71,7 +71,7 @@ class Net(nn.Module):
 
         self.lstm = nn.LSTM(256, 256, num_layers=1)
 
-        self.policy = Decoder(action_space, grid_shape)
+        self.policy = Decoder(action_shape, grid_shape)
         self.baseline = nn.Linear(256, 1)
 
     def _grid(self, w, h):
@@ -130,11 +130,11 @@ class Net(nn.Module):
 class Decoder(nn.Module):
     SPATIAL_ACTIONS = ["end", "control"]
 
-    def __init__(self, action_space, grid_shape):
+    def __init__(self, action_shape, grid_shape):
         super(Decoder, self).__init__()
-        self.num_actions = len(action_space.nvec)
+        self.num_actions = len(action_shape)
         modules = []
-        action_space = action_space.nvec
+        action_shape = action_shape
         for i in range(self.num_actions):
             if i < 2:
                 module = nn.Sequential(
@@ -147,12 +147,12 @@ class Decoder(nn.Module):
                     View(-1, 32 * 32),
                 )
             else:
-                module = nn.Linear(256, action_space[i])
+                module = nn.Linear(256, action_shape[i])
             modules.append(module)
         self.decode = nn.ModuleList(modules)
 
         modules = []
-        for i, shape in enumerate(action_space):
+        for i, shape in enumerate(action_shape):
             if i < 2:
                 module = Location(grid_shape)
             else:
@@ -222,11 +222,11 @@ class View(nn.Module):
 
 
 class MaskMLP(nn.Module):
-    def __init__(self, action_space, grid_shape):
+    def __init__(self, action_shape, grid_shape):
         super(MaskMLP, self).__init__()
         self.w, self.h = grid_shape
         modules = []
-        for i, shape in enumerate(action_space.nvec):
+        for i, shape in enumerate(action_shape):
             if i < 2:
                 module = Location(grid_shape)
             else:
@@ -302,9 +302,9 @@ class ResBlock(nn.Module):
 
 
 class Discriminator(nn.Module):
-    def __init__(self, obs_space, power_iters):
+    def __init__(self, obs_shape, power_iters):
         super(Discriminator, self).__init__()
-        c, h, w = obs_space.shape
+        c, h, w = obs_shape
 
         ndf = 64
         self.main = nn.Sequential(
@@ -341,9 +341,9 @@ class Discriminator(nn.Module):
 
 
 class ComplementDiscriminator(Discriminator, nn.Module):
-    def __init__(self, obs_space, power_iters):
-        super(ComplementDiscriminator, self).__init__(obs_space, power_iters)
-        c, h, w = obs_space.shape
+    def __init__(self, obs_shape, power_iters):
+        super(ComplementDiscriminator, self).__init__(obs_shape, power_iters)
+        c, h, w = obs_shape
         left = torch.ones(1, c // 2, h, w // 2)
         right = torch.zeros(1, c // 2, h, w // 2)
         mask = torch.cat([left, right], dim=-1)

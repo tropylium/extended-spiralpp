@@ -587,35 +587,35 @@ def train(flags):
     if flags.condition:
         env = env_wrapper.ConcatTarget(env, None)
 
-    obs_space = env.observation_space
+    obs_shape = env.observation_space.shape
 
-    action_space = env.action_space
+    action_shape = env.action_space.nvec
     env.close()
 
     model = models.Net(
-        obs_space=obs_space,
-        action_space=action_space,
+        obs_shape=obs_shape,
+        action_shape=action_shape,
         grid_shape=(grid_width, grid_width),
     )
     model = model.to(device=flags.learner_device)
 
     actor_model = models.Net(
-        obs_space=obs_space,
-        action_space=action_space,
+        obs_shape=obs_shape,
+        action_shape=action_shape,
         grid_shape=(grid_width, grid_width),
     ).eval()
     actor_model.to(device=flags.actor_device)
 
     if flags.condition:
-        D = models.ComplementDiscriminator(obs_space, flags.power_iters)
+        D = models.ComplementDiscriminator(obs_shape, flags.power_iters)
     else:
-        D = models.Discriminator(obs_space, flags.power_iters)
+        D = models.Discriminator(obs_shape, flags.power_iters)
     D.to(device=flags.learner_device)
 
     if flags.condition:
-        D_eval = models.ComplementDiscriminator(obs_space, flags.power_iters)
+        D_eval = models.ComplementDiscriminator(obs_shape, flags.power_iters)
     else:
-        D_eval = models.Discriminator(obs_space, flags.power_iters)
+        D_eval = models.Discriminator(obs_shape, flags.power_iters)
     D_eval = D_eval.to(device=flags.learner_device).eval()
 
     optimizer = optim.Adam(model.parameters(), lr=flags.policy_learning_rate)
@@ -656,9 +656,7 @@ def train(flags):
 
     actorpool_thread = threading.Thread(target=run, name="actorpool-thread")
 
-    tsfm = transforms.Compose(
-        [transforms.Resize(obs_space.shape[1:]), transforms.ToTensor()]
-    )
+    tsfm = transforms.Compose([transforms.Resize(obs_shape[1:]), transforms.ToTensor()])
 
     dataset = flags.dataset
 
