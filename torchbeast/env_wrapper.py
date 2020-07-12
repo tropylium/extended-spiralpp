@@ -26,6 +26,7 @@
 
 import numpy as np
 import gym
+from gym import spaces
 import cv2
 
 cv2.ocl.setUseOpenCL(False)
@@ -34,45 +35,87 @@ from torch.utils.data import DataLoader
 
 
 class WarpFrame(gym.ObservationWrapper):
-    def __init__(self, env, height=64, width=64):
+    def __init__(self, env, width=64, height=64, grayscale=True, dict_space_key=None):
+        """
+        Warp frames to 84x84 as done in the Nature paper and later work.
+        If the environment uses dictionary observations, `dict_space_key` can be specified which indicates which
+        observation should be warped.
+        """
         super().__init__(env)
-        self._height = height
         self._width = width
+        self._height = height
+        self._expand_dims = grayscale
+        self._key = dict_space_key
 
-        original_space = env.observation_space
-        c = original_space.shape[-1]
-        new_space = gym.spaces.Box(
-            low=0, high=255, shape=(self._height, self._width, c), dtype=np.uint8,
-        )
-        self.observation_space = new_space
-        assert original_space.dtype == np.uint8 and len(original_space.shape) == 3
-
-        if c == 1:
-            self._grayscale = True
+        if self._expand_dims:
+            num_colors = 1
         else:
-            self._grayscale = False
+            num_colors = 3
+
+        if self._key is None:
+            original_space = self.observation_space
+        else:
+            original_space = self.observation_space.spaces[self._key]
+
+        self._grayscale = original_space.shape[-1] == 3
+
+        new_space = gym.spaces.Box(
+            low=0,
+            high=255,
+            shape=(self._height, self._width, num_colors),
+            dtype=np.uint8,
+        )
+        if self._key is None:
+            self.observation_space = new_space
+        else:
+            self.observation_space.spaces[self._key] = new_space
+
+        assert original_space.dtype == np.uint8 and len(original_space.shape) in [1, 3]
 
     def observation(self, obs):
-        frame = cv2.resize(
-            obs["canvas"], (self._width, self._height), interpolation=cv2.INTER_AREA
-        )
-        if self._grayscale:
-            frame = np.expand_dims(frame, -1)
-        obs["canvas"] = frame
+        if self._key is None:
+            frame = obs
+        else:
+            frame = obs[self._key]
 
+        if self._grayscale:
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+        frame = cv2.resize(
+            frame, (self._width, self._height), interpolation=cv2.INTER_AREA
+        )
+        if self._expand_dims:
+            frame = np.expand_dims(frame, -1)
+
+        if self._key is None:
+            obs = frame
+        else:
+            obs = obs.copy()
+            obs[self._key] = frame
         return obs
 
 
 class Base(gym.Wrapper):
     def __init__(self, env, noise_dim=10):
-        super(Base, self).__init__(env)
+        super().__init__(env)
         self.dim = noise_dim
-        self._initial_action = np.zeros(env.action_space.nvec.shape, dtype=np.int64)
+        self.action_space = spaces.MultiDiscrete(self.action_space.nvec)
+        self._initial_action = np.zeros(self.action_space.nvec.shape, dtype=np.int64)
 
-        original_space = env.observation_space
-        h, w, c = original_space.shape
-        new_space = gym.spaces.Box(low=0, high=255, shape=(c, h, w), dtype=np.uint8)
-        self.observation_space = new_space
+        new_space = env.observation_space.spaces
+        h, w, c = new_space["canvas"].shape
+
+        new_space["canvas"] = spaces.Box(
+            low=0, high=255, shape=(c, h, w), dtype=np.uint8
+        )
+        new_space.update(
+            {
+                "noise_sample": spaces.Box(
+                    low=-1.0, high=1.0, shape=(noise_dim,), dtype=np.float32
+                ),
+                "prev_action": self.action_space,
+            }
+        )
+        self.observation_space = spaces.Dict(new_space)
 
     def _convert_to_dict(self, action):
         return dict(zip(self.env.order, action.squeeze().tolist()))
@@ -85,6 +128,7 @@ class Base(gym.Wrapper):
 
     def step(self, action):
         obs, reward, done, info = self.env.step(self._convert_to_dict(action))
+        obs = obs.copy()
         obs["canvas"] = self._to_NCHW(obs["canvas"])
         obs["noise_sample"] = self.noise
         obs["prev_action"] = self.prev_action
@@ -93,6 +137,7 @@ class Base(gym.Wrapper):
 
     def reset(self):
         obs = self.env.reset()
+        obs = obs.copy()
         obs["canvas"] = self._to_NCHW(obs["canvas"])
 
         self.noise = self._sample_noise(self.dim)
@@ -117,24 +162,24 @@ class ConcatTarget(gym.Wrapper):
     """
 
     def __init__(self, env, dataset):
-        super(ConcatTarget, self).__init__(env)
-        if dataset is not None:
-            self.dataloader = DataLoader(dataset, shuffle=True, pin_memory=True)
-            self.iterator = iter(self.dataloader)
+        super().__init__(env)
+        self.dataloader = DataLoader(dataset, shuffle=True, pin_memory=True)
+        self.iterator = iter(self.dataloader)
 
-        original_space = env.observation_space
+        new_space = env.observation_space.spaces
 
-        c, h, w = original_space.shape
-        new_space = gym.spaces.Box(
+        c, h, w = new_space["canvas"].shape
+        new_space["canvas"] = gym.spaces.Box(
             low=0, high=255, shape=(c * 2, h, w), dtype=np.uint8,
         )
-        self.observation_space = new_space
+        self.observation_space = spaces.Dict(new_space)
 
     def _concat(self, canvas):
         return np.concatenate([canvas, self.target])
 
     def step(self, action):
         obs, reward, done, info = self.env.step(action)
+        obs = obs.copy()
         obs["canvas"] = self._concat(obs["canvas"])
         return obs, reward, done, info
 
@@ -148,6 +193,7 @@ class ConcatTarget(gym.Wrapper):
         self.target = target.squeeze(0).numpy()
 
         obs = self.env.reset()
+        obs = obs.copy()
         obs["canvas"] = self._concat(obs["canvas"])
 
         return obs

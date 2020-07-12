@@ -30,18 +30,21 @@ os.environ["OMP_NUM_THREADS"] = "1"  # Necessary for multithreading.
 import nest
 import torch
 import torch.optim as optim
-import torchvision.transforms as transforms
 from libtorchbeast import actorpool
+
 from torch import nn
 from torch.nn import functional as F
-from torchvision.datasets import CelebA, Omniglot, MNIST
 from torch.utils.data import DataLoader
 
-from torchbeast import env_wrapper
+import gym
+from gym import spaces
+
+import numpy as np
+
+from torchbeast import utils
 from torchbeast.core import file_writer
 from torchbeast.core import vtrace
 from torchbeast.core import models
-from torchbeast.core import datasets
 
 # yapf: disable
 parser = argparse.ArgumentParser(description="PyTorch Scalable Agent")
@@ -72,6 +75,8 @@ parser.add_argument("--brush_type", type=str, default="classic/dry_brush",
 parser.add_argument("--brush_sizes", nargs='+', type=int,
                     default=[1, 2, 4, 8, 12, 24],
                     help="Set brush_sizes float is allowed")
+parser.add_argument("--use_color", action="store_true",
+                    help="use_color flag")
 parser.add_argument("--use_pressure", action="store_true",
                     help="use_pressure flag")
 parser.add_argument("--use_compound", action="store_true",
@@ -230,7 +235,6 @@ def inference(flags, inference_batcher, model, lock=threading.Lock()):
             )
 
             with lock:
-                model = model
                 outputs = model(obs, done, agent_state)
 
             outputs = nest.map(lambda t: t.cpu(), outputs)
@@ -302,7 +306,7 @@ def learn(
                 reward[index[:, 0], index[:, 1]] += p
 
         env_outputs = list(env_outputs)
-        env_outputs[1] = reward
+        env_outputs[1] += reward
         env_outputs = tuple(env_outputs)
 
         optimizer.zero_grad()
@@ -368,18 +372,19 @@ def learn(
 
         actor_model.load_state_dict(model.state_dict())
 
-        index = done[1:].nonzero()
-        index[:, 0] += 1
         episode_returns = env_outputs.episode_return[env_outputs.done]
-        if flags.condition:
-            discriminator_returns = env_outputs.reward[env_outputs.done]
+
+        if final_render_exists:
+            discriminator_returns = torch.mean(
+                p[index[:, 0], index[:, 1]] if flags.use_tca else p
+            ).item()
         else:
-            discriminator_returns = env_outputs.reward
+            discriminator_returns = None
 
         stats["step"] = stats.get("step", 0) + flags.unroll_length * flags.batch_size
         stats["episode_returns"] = tuple(episode_returns.cpu().numpy())
         stats["mean_episode_return"] = torch.mean(episode_returns).item()
-        stats["mean_discriminator_returns"] = torch.mean(discriminator_returns).item()
+        stats["mean_discriminator_returns"] = discriminator_returns
         stats["total_loss"] = total_loss.item()
         stats["pg_loss"] = pg_loss.item()
         stats["baseline_loss"] = baseline_loss.item()
@@ -390,6 +395,10 @@ def learn(
             stats["l2_loss"] = F.mse_loss(
                 *final_render.split(split_size=final_render.shape[1] // 2, dim=1)
             ).item()
+
+        if not len(episode_returns):
+            # Hide the mean-of-empty-tuple NaN as it scares people.
+            stats["mean_episode_return"] = None
 
         plogger.log(stats)
         lock.release()
@@ -467,13 +476,6 @@ def learn_D(
             stats["D_G_z1"] = D_G_z1.item()
 
 
-BRUSHES_BASEDIR = os.path.join(os.getcwd(), "third_party/mypaint-brushes-1.3.0")
-BRUSHES_BASEDIR = os.path.abspath(BRUSHES_BASEDIR)
-
-SHADERS_BASEDIR = os.path.join(os.getcwd(), "third_party/paint/shaders")
-SHADERS_BASEDIR = os.path.abspath(SHADERS_BASEDIR)
-
-
 def train(flags):
     if flags.xpid is None:
         flags.xpid = "torchbeast-%s" % time.strftime("%Y%m%d-%H%M%S")
@@ -545,50 +547,28 @@ def train(flags):
                 break
         pipe_id += 1
 
-    config = dict(
-        episode_length=flags.episode_length,
-        canvas_width=flags.canvas_width,
-        grid_width=grid_width,
-        brush_sizes=flags.brush_sizes,
-    )
+    dataset_uses_color = flags.dataset not in ["mnist", "omniglot"]
+    grayscale = dataset_uses_color and not flags.use_color
+    dataset = utils.create_dataset(flags.dataset, grayscale)
 
-    if flags.dataset == "celeba" or flags.dataset == "celeba-hq":
-        use_color = True
+    is_color = flags.use_color or flags.env_type == "fluid"
+    if is_color is False:
+        grayscale = True
     else:
-        use_color = False
+        grayscale = is_color and not dataset_uses_color
 
-    if flags.env_type == "fluid":
-        env_name = "Fluid"
-        config["shaders_basedir"] = SHADERS_BASEDIR
-    elif flags.env_type == "libmypaint":
-        env_name = "Libmypaint"
-        config.update(
-            dict(
-                brush_type=flags.brush_type,
-                use_color=use_color,
-                use_pressure=flags.use_pressure,
-                use_alpha=False,
-                background="white",
-                brushes_basedir=BRUSHES_BASEDIR,
-            )
-        )
-
-    if flags.use_compound:
-        env_name += "-v1"
-    else:
-        env_name += "-v0"
-
-    env = env_wrapper.make_raw(env_name, config)
-    if frame_width != flags.canvas_width:
-        env = env_wrapper.WarpFrame(env, height=frame_width, width=frame_width)
-
-    env = env_wrapper.Base(env)
+    env_name, config = utils.parse_flags(flags)
+    env = utils.create_env(env_name, config, grayscale, dataset=None)
 
     if flags.condition:
-        env = env_wrapper.ConcatTarget(env, None)
+        new_space = env.observation_space.spaces
+        c, h, w = new_space["canvas"].shape
+        new_space["canvas"] = gym.spaces.Box(
+            low=0, high=255, shape=(c * 2, h, w), dtype=np.uint8
+        )
+        env.observation_space = spaces.Dict(new_space)
 
-    obs_shape = env.observation_space.shape
-
+    obs_shape = env.observation_space["canvas"].shape
     action_shape = env.action_space.nvec
     env.close()
 
@@ -655,25 +635,6 @@ def train(flags):
             raise e
 
     actorpool_thread = threading.Thread(target=run, name="actorpool-thread")
-
-    tsfm = transforms.Compose([transforms.Resize(obs_shape[1:]), transforms.ToTensor()])
-
-    dataset = flags.dataset
-
-    if dataset == "mnist":
-        dataset = MNIST(root="./", train=True, transform=tsfm, download=True)
-    elif dataset == "omniglot":
-        dataset = Omniglot(root="./", background=True, transform=tsfm, download=True)
-    elif dataset == "celeba":
-        dataset = CelebA(
-            root="./", split="train", target_type=None, transform=tsfm, download=True
-        )
-    elif dataset == "celeba-hq":
-        dataset = datasets.CelebAHQ(
-            root="./", split="train", transform=tsfm, download=True
-        )
-    else:
-        raise NotImplementedError
 
     dataloader = DataLoader(
         dataset,
@@ -829,60 +790,31 @@ def main(flags):
         raise Exception("--pipes_basename has to be of the form unix:/some/path.")
 
     if flags.start_servers:
-        env_type = {"fluid": "Fluid", "libmypaint": "Libmypaint"}
-
-        env_name = env_type[flags.env_type]
-        if flags.use_compound:
-            env_name += "-v1"
-        else:
-            env_name += "-v0"
-
         command = [
             "python",
             "-m",
             "torchbeast.polybeast_env",
             f"--num_servers={flags.num_actors}",
             f"--pipes_basename={flags.pipes_basename}",
-            f"--env={env_name}",
             f"--env_type={flags.env_type}",
             f"--episode_length={flags.episode_length}",
             f"--canvas_width={flags.canvas_width}",
             f"--brush_sizes={flags.brush_sizes}",
             f"--new_stroke_penalty={flags.new_stroke_penalty}",
             f"--stroke_length_penalty={flags.stroke_length_penalty}",
+            f"--dataset={flags.dataset}",
         ]
 
-        if env_type == "fluid":
-            assert flags.dataset != "omniglot" and flags.dataset != "mnist"
-
-            command.extend(
-                [f"--env={env_name}", f"--shaders_basedir={SHADERS_BASEDIR}"]
-            )
-
-        elif env_type == "libmypaint":
-            if flags.dataset == "celeba" or flags.dataset == "celeba-hq":
-                command.append("--use_color")
-
-            command.extend(
-                [
-                    f"--env={env_name}",
-                    f"--brush_type={flags.brush_type}",
-                    "--background=white",
-                    f"--brushes_basedir={BRUSHES_BASEDIR}",
-                ]
-            )
-
+        if flags.env_type == "libmypaint":
+            command.append(f"--brush_type={flags.brush_type}")
         if flags.use_pressure:
             command.append("--use_pressure")
-
         if flags.condition:
-            command.extend(
-                [
-                    "--condition",
-                    f"--dataset={flags.dataset}",
-                    f"--num_actors={flags.num_actors}",
-                ]
-            )
+            command.append("--condition")
+        if flags.use_compound:
+            command.append("--use_compound")
+        if flags.use_color:
+            command.append("--use_color")
 
         logging.info("Starting servers with command: " + " ".join(command))
         server_proc = subprocess.Popen(command)
