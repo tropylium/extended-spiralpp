@@ -116,7 +116,7 @@ ENV LD_LIBRARY_PATH ${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH}
 
 RUN python setup.py install
 
-ENV ENV OMP_NUM_THREADS 1
+ENV OMP_NUM_THREADS 1
 
 # Run
 CMD ["bash", "-c", "python -m torchbeast.polybeast --xpid example"]
