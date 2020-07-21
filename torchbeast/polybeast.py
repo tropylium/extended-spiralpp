@@ -243,6 +243,11 @@ def inference(flags, inference_batcher, model, lock=threading.Lock()):
             batch.set_outputs((core_output, core_state))
 
 
+def reward_func(p):
+    p = F.relu(p)
+    return p.log() - (1 - p).log()
+
+
 EnvOutput = collections.namedtuple(
     "EnvOutput", "frame, reward, done, episode_step episode_return"
 )
@@ -295,15 +300,18 @@ def learn(
                     p_t_plus_1[index[:, 0], index[:, 1]] = p[-index.shape[0] :]
                     p_t_plus_1 = p_t_plus_1[1:]
 
-                    reward[1:] += p_t_plus_1 - p_t
+                    r = reward_func(p_t_plus_1 - p_t)
+                    reward[1:] += r
                 else:
                     p = D(flat_frame).view(-1, flags.batch_size)
-                    reward[1:] += p[1:] - p[:-1]
+                    r = reward_func(p[1:] - p[:-1])
+                    reward[1:] += r
 
         elif final_render_exists:
             with torch.no_grad():
                 p = D(final_render)
-                reward[index[:, 0], index[:, 1]] += p
+                r = reward_func(p)
+                reward[index[:, 0], index[:, 1]] += r
 
         env_outputs = list(env_outputs)
         env_outputs[1] += reward
@@ -375,9 +383,7 @@ def learn(
         episode_returns = env_outputs.episode_return[env_outputs.done]
 
         if final_render_exists:
-            discriminator_returns = torch.mean(
-                p[index[:, 0], index[:, 1]] if flags.use_tca else p
-            ).item()
+            discriminator_returns = torch.mean(r).item()
         else:
             discriminator_returns = None
 
