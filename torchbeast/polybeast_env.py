@@ -90,7 +90,7 @@ if __name__ == "__main__":
     grayscale = dataset_uses_color and not flags.use_color
 
     if flags.condition:
-        dataset = utils.create_dataset(flags.dataset, grayscale)
+        dataset = utils.create_dataset(flags.dataset, grayscale, normalize=False)
         per_actor = len(dataset) // flags.num_servers
 
     is_color = flags.use_color or flags.env_type == "fluid"

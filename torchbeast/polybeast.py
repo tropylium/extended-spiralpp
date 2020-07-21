@@ -244,7 +244,7 @@ def inference(flags, inference_batcher, model, lock=threading.Lock()):
 
 
 def reward_func(p):
-    p = F.relu(p)
+    p = F.relu(p + 1e-12)
     return p.log() - (1 - p).log()
 
 
@@ -452,7 +452,8 @@ def learn_D(
 
             while len(replay_buffer) < flags.batch_size:
                 obs = next(replay_queue)
-                replay_buffer.push(obs["canvas"].squeeze(0))
+                replay_buffer.push(((obs["canvas"] - 0.5) / 0.5).squeeze(0))
+                del obs
 
             fake = replay_buffer.sample(flags.batch_size).to(
                 flags.learner_device, non_blocking=True
@@ -597,6 +598,17 @@ def train(flags):
     else:
         D = models.Discriminator(obs_shape, flags.power_iters)
     D.to(device=flags.learner_device)
+
+    # custom weights initialization called on netG and netD
+    def weights_init(m):
+        classname = m.__class__.__name__
+        if classname.find("Conv") != -1:
+            nn.init.normal_(m.weight.data, 0.0, 0.02)
+        elif classname.find("BatchNorm") != -1:
+            nn.init.normal_(m.weight.data, 1.0, 0.02)
+            nn.init.constant_(m.bias.data, 0)
+
+    D.apply(weights_init)
 
     if flags.condition:
         D_eval = models.ComplementDiscriminator(obs_shape, flags.power_iters)
