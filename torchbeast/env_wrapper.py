@@ -170,7 +170,7 @@ class ConcatTarget(gym.Wrapper):
 
         c, h, w = new_space["canvas"].shape
         new_space["canvas"] = gym.spaces.Box(
-            low=0, high=255, shape=(c * 2, h, w), dtype=np.uint8,
+            low=0.0, high=1.0, shape=(c * 2, h, w), dtype=np.float32,
         )
         self.observation_space = spaces.Dict(new_space)
 

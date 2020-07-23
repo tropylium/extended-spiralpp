@@ -244,8 +244,12 @@ def inference(flags, inference_batcher, model, lock=threading.Lock()):
 
 
 def reward_func(p):
-    p = F.relu(p + 1e-12)
-    return p.log() - (1 - p).log()
+    p = F.relu(p)
+    return (p + 1e-12).log() - (1 - p + 1e-12).log()
+
+
+def normalize(frame):
+    return (frame - 0.5) / 0.5
 
 
 EnvOutput = collections.namedtuple(
@@ -279,7 +283,7 @@ def learn(
 
         if done[1:].any().item():
             index = done[1:].nonzero()
-            final_render = final_obs["canvas"][0, index[:, 1]]
+            final_render = normalize(final_obs["canvas"][0, index[:, 1]])
             final_render_exists = True
             index[:, 0] += 1
         else:
@@ -288,7 +292,7 @@ def learn(
 
         lock.acquire()  # Only one thread learning at a time.
         if flags.use_tca:
-            flat_frame = torch.flatten(obs["canvas"], 0, 1)
+            flat_frame = normalize(torch.flatten(obs["canvas"], 0, 1))
 
             with torch.no_grad():
                 if final_render_exists:
