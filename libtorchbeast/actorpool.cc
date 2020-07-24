@@ -419,7 +419,7 @@ class ActorPool {
     std::vector<TensorNest> rollout;
 
     try {
-      int next_episode = 2;
+      int next_episode = 1;
       while (true) {
         rollout.push_back(std::move(last));
 
@@ -427,7 +427,7 @@ class ActorPool {
           all_agent_outputs = inference_batcher_->compute(compute_inputs);
 
 	  if (next_episode == episode_length_) {
-	    next_episode = 1;
+	    next_episode = 0;
 
 	    // get final render resets in next step
             stream->Write(action_pb);
@@ -438,7 +438,9 @@ class ActorPool {
 
             final_render = env_outputs.get_vector()[0];
 	    replay_queue_->enqueue({final_render});
-	  } 
+
+	  }
+
 	  next_episode += 1;
           
           agent_state = all_agent_outputs.get_vector()[1];

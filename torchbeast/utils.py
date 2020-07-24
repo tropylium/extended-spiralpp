@@ -104,7 +104,23 @@ def create_dataset(name, grayscale, normalize=True):
     return dataset
 
 
-def create_env(env_name, config, grayscale, dataset):
+default_config = dict(
+    episode_length=20,
+    canvas_width=256,
+    grid_width=32,
+    brush_sizes=[1, 2, 4, 6, 12, 24],
+    brush_type="classic/dry_brush",
+    use_pressure=True,
+    use_color=False,
+    use_alpha=False,
+    background="white",
+    brushes_basedir=BRUSHES_BASEDIR,
+)
+
+
+def create_env(
+    env_name="Libmypaint-v0", config=default_config, grayscale=True, dataset=False
+):
     env = env_wrapper.make_raw(env_name, config)
 
     if frame_width != config["canvas_width"]:

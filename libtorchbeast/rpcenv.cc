@@ -54,7 +54,7 @@ class EnvServer {
       bool done = true;
       int episode_step = 0;
       float episode_return = 0.0;
-      bool terminate = false;
+      bool reset = false;
 
       auto set_observation = py::cpp_function(
           [&observation](PyArrayNest o) { observation = std::move(o); },
@@ -100,14 +100,14 @@ class EnvServer {
         }
         try {
           // I'm not sure if this is fast, but it's convienient.
-	  if (terminate) {
+	  if (reset) {
 	    set_observation(resetfunc());
             // Reset episode_* for the _next_ step.
 	    reward = 0.0;
             done = true;
             episode_step = 0;
             episode_return = 0.0;
-	    terminate = false;
+	    reset = false;
 	  } else { 
 	    set_observation_reward_done(*stepfunc(nest_pb_to_nest(
 	        action_pb.mutable_nest_action(), array_pb_to_nest)));
@@ -116,7 +116,7 @@ class EnvServer {
             episode_return += reward;
 
 	    if (done) {
-              terminate = true;
+              reset = true;
 	      done = false;
 	    }
 

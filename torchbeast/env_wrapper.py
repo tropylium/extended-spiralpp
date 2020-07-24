@@ -121,7 +121,7 @@ class Base(gym.Wrapper):
         return dict(zip(self.env.order, action.squeeze().tolist()))
 
     def _to_NCHW(self, canvas):
-        return np.transpose(canvas, axes=(2, 0, 1))
+        return np.transpose(canvas, axes=(2, 0, 1)) / 255.0
 
     def _sample_noise(self, dims):
         return np.random.normal(size=(dims,)).astype(np.float32)

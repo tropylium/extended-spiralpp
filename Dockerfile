@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:experimental
-FROM nvidia/cuda:10.1-cudnn7-runtime-ubuntu18.04
+FROM nvidia/cuda:10.2-cudnn7-runtime-ubuntu18.04
 
 SHELL ["/bin/bash", "-c"]
 
@@ -83,7 +83,7 @@ RUN pip install -e .
 #
 WORKDIR /src
 
-RUN git clone --single-branch --branch v1.5.0 --recursive https://github.com/pytorch/pytorch
+RUN git clone --single-branch --branch v1.5.1 --recursive https://github.com/pytorch/pytorch
 
 WORKDIR /src/pytorch
 
