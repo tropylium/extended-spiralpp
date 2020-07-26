@@ -342,14 +342,13 @@ class DynamicBatcher {
 
 class ActorPool {
  public:
-  ActorPool(int unroll_length, int episode_length, 
+  ActorPool(int unroll_length,
 	    std::shared_ptr<BatchingQueue<>> learner_queue,
 	    std::shared_ptr<BatchingQueue<>> replay_queue,
             std::shared_ptr<DynamicBatcher> inference_batcher,
             std::vector<std::string> env_server_addresses,
             TensorNest initial_agent_state)
       : unroll_length_(unroll_length),
-	episode_length_(episode_length),
         learner_queue_(std::move(learner_queue)),
         replay_queue_(std::move(replay_queue)),
         inference_batcher_(std::move(inference_batcher)),
@@ -388,7 +387,6 @@ class ActorPool {
     TensorNest initial_agent_state = initial_agent_state_;
 
     TensorNest env_outputs = ActorPool::step_pb_to_nest(&step_pb);
-    TensorNest final_render = env_outputs.get_vector()[0];
 
     TensorNest compute_inputs(std::vector({env_outputs, initial_agent_state}));
     TensorNest all_agent_outputs =
@@ -417,32 +415,15 @@ class ActorPool {
 
     rpcenv::Action action_pb;
     std::vector<TensorNest> rollout;
+    std::vector<TensorNest> new_obs;
 
     try {
-      int next_episode = 1;
       while (true) {
         rollout.push_back(std::move(last));
 
 	for (int t = 1; t <= unroll_length_; t++) {
           all_agent_outputs = inference_batcher_->compute(compute_inputs);
 
-	  if (next_episode == episode_length_) {
-	    next_episode = 0;
-
-	    // get final render resets in next step
-            stream->Write(action_pb);
-            if (!stream->Read(&step_pb)) {
-              throw py::connection_error("Read failed.");
-            }
-            env_outputs = ActorPool::step_pb_to_nest(&step_pb);
-
-            final_render = env_outputs.get_vector()[0];
-	    replay_queue_->enqueue({final_render});
-
-	  }
-
-	  next_episode += 1;
-          
           agent_state = all_agent_outputs.get_vector()[1];
           agent_outputs = all_agent_outputs.get_vector()[0];
 
@@ -462,21 +443,40 @@ class ActorPool {
             throw py::connection_error("Read failed.");
           }
           env_outputs = ActorPool::step_pb_to_nest(&step_pb);
+          TensorNest obs = env_outputs.get_vector()[0];
+
+	  // there's probably a better way to do this
+	  bool done = env_outputs.get_vector()[2].front().is_nonzero();
+	  if (done) {
+	    replay_queue_->enqueue({obs});
+	    new_obs.push_back(std::move(obs));
+
+	    // resets environment
+            if (!stream->Read(&step_pb)) {
+              throw py::connection_error("Read failed.");
+            }
+            env_outputs = ActorPool::step_pb_to_nest(&step_pb);
+            obs = env_outputs.get_vector()[0];
+	  }
+
           compute_inputs = TensorNest(std::vector({env_outputs, agent_state})); 
 
           last = TensorNest(std::vector({env_outputs, agent_outputs}));
+	  if (!done) {
+	    new_obs.push_back(std::move(obs));
+	  }
           rollout.push_back(std::move(last));
         }
         last = rollout.back();
         learner_queue_->enqueue({
           TensorNest(
-	    std::vector({batch(rollout, 0), 
-	    std::move(initial_agent_state),
-	    final_render})
+	    std::vector({batch(rollout, 0), std::move(batch(new_obs, 0)), 
+            std::move(initial_agent_state)})
 	  ),
         });
 
         rollout.clear();
+	new_obs.clear();
         initial_agent_state = agent_state;  // Copy
         count_ += unroll_length_;
       }
@@ -588,7 +588,6 @@ class ActorPool {
   std::atomic_uint64_t count_;
 
   const int unroll_length_;
-  const int episode_length_;
   std::shared_ptr<BatchingQueue<>> learner_queue_;
   std::shared_ptr<BatchingQueue<>> replay_queue_;
   std::shared_ptr<DynamicBatcher> inference_batcher_;
@@ -602,12 +601,12 @@ PYBIND11_MODULE(actorpool, m) {
   py::register_exception<std::bad_variant_access>(m, "NestError");
 
   py::class_<ActorPool>(m, "ActorPool")
-      .def(py::init<int, int, std::shared_ptr<BatchingQueue<>>,
+      .def(py::init<int, std::shared_ptr<BatchingQueue<>>,
                     std::shared_ptr<BatchingQueue<>>,
                     std::shared_ptr<DynamicBatcher>, 
 		    std::vector<std::string>,
                     TensorNest>(),
-           py::arg("unroll_length"), py::arg("episode_length"), 
+           py::arg("unroll_length"), 
 	   py::arg("learner_queue").none(false),
 	   py::arg("replay_queue").none(false),
            py::arg("inference_batcher").none(false),

@@ -243,17 +243,12 @@ def inference(flags, inference_batcher, model, lock=threading.Lock()):
             batch.set_outputs((core_output, core_state))
 
 
-def reward_func(p):
-    p = F.relu(p)
-    return (p + 1e-12).log() - (1 - p + 1e-12).log()
-
-
 def normalize(frame):
     return (frame - 0.5) / 0.5
 
 
 EnvOutput = collections.namedtuple(
-    "EnvOutput", "frame, reward, done, episode_step episode_return"
+    "EnvOutput", "obs, reward, done, episode_step episode_return"
 )
 AgentOutput = collections.namedtuple("AgentOutput", "action policy_logits baseline")
 Batch = collections.namedtuple("Batch", "env agent")
@@ -261,6 +256,7 @@ Batch = collections.namedtuple("Batch", "env agent")
 
 def learn(
     flags,
+    reward_function,
     learner_queue,
     model,
     actor_model,
@@ -272,54 +268,33 @@ def learn(
     lock=threading.Lock(),
 ):
     for tensors in learner_queue:
+        tensors = list(tensors)
+        tensors[1] = tensors[1]["canvas"]
+        tensors = tuple(tensors)
+
         tensors = nest.map(
             lambda t: t.to(flags.learner_device, non_blocking=True), tensors
         )
 
-        batch, initial_agent_state, final_obs = tensors
+        batch, new_frame, initial_agent_state = tensors
 
         env_outputs, actor_outputs = batch
         obs, reward, done, step, _ = env_outputs
 
-        if done[1:].any().item():
-            index = done[1:].nonzero()
-            final_render = normalize(final_obs["canvas"][0, index[:, 1]])
-            final_render_exists = True
-            index[:, 0] += 1
-        else:
-            del final_obs
-            final_render_exists = False
+        index = done[1:].nonzero()
+        print(done)
+        print(torch.mean(obs["canvas"], dim=(2, 3, 4)))
+        print(torch.mean(new_frame, dim=(2, 3, 4)))
+        if new_frame.size():
+            print(new_frame.shape)
+        print(torch.mean(new_frame[index[:, 0], index[:, 1]], dim=(1, 2, 3)))
 
         lock.acquire()  # Only one thread learning at a time.
-        if flags.use_tca:
-            flat_frame = normalize(torch.flatten(obs["canvas"], 0, 1))
 
-            with torch.no_grad():
-                if final_render_exists:
-                    p = D(torch.cat([flat_frame, final_render]))
-
-                    p_t_plus_1 = p[: -index.shape[0]].view(-1, flags.batch_size)
-                    p_t = p_t_plus_1[:-1]
-
-                    p_t_plus_1[index[:, 0], index[:, 1]] = p[-index.shape[0] :]
-                    p_t_plus_1 = p_t_plus_1[1:]
-
-                    r = reward_func(p_t_plus_1 - p_t)
-                    reward[1:] += r
-                else:
-                    p = D(flat_frame).view(-1, flags.batch_size)
-                    r = reward_func(p[1:] - p[:-1])
-                    reward[1:] += r
-
-        elif final_render_exists:
-            with torch.no_grad():
-                p = D(final_render)
-                r = reward_func(p)
-                reward[index[:, 0], index[:, 1]] += r
-
-        env_outputs = list(env_outputs)
-        env_outputs[1] += reward
-        env_outputs = tuple(env_outputs)
+        if flags.use_tca or done.any().item():
+            env_outputs = list(env_outputs)
+            env_outputs[1] = reward_function(D, env_outputs, new_frame)
+            batch = (tuple(env_outputs), actor_outputs)
 
         optimizer.zero_grad()
 
@@ -386,24 +361,19 @@ def learn(
 
         episode_returns = env_outputs.episode_return[env_outputs.done]
 
-        if final_render_exists:
-            discriminator_returns = torch.mean(r).item()
-        else:
-            discriminator_returns = None
-
         stats["step"] = stats.get("step", 0) + flags.unroll_length * flags.batch_size
         stats["episode_returns"] = tuple(episode_returns.cpu().numpy())
         stats["mean_episode_return"] = torch.mean(episode_returns).item()
-        stats["mean_discriminator_returns"] = discriminator_returns
+        # stats["mean_discriminator_returns"] = discriminator_returns
         stats["total_loss"] = total_loss.item()
         stats["pg_loss"] = pg_loss.item()
         stats["baseline_loss"] = baseline_loss.item()
         stats["entropy_loss"] = entropy_loss.item()
         stats["learner_queue_size"] = learner_queue.size()
 
-        if flags.condition and final_render_exists:
+        if flags.condition and new_frame.size() != 0:
             stats["l2_loss"] = F.mse_loss(
-                *final_render.split(split_size=final_render.shape[1] // 2, dim=1)
+                *new_frame.split(split_size=new_frame.shape[1] // 2, dim=1)
             ).item()
 
         if not len(episode_returns):
@@ -638,7 +608,6 @@ def train(flags):
     # The ActorPool that will run `flags.num_actors` many loops.
     actors = actorpool.ActorPool(
         unroll_length=flags.unroll_length,
-        episode_length=flags.episode_length,
         learner_queue=learner_queue,
         replay_queue=replay_queue,
         inference_batcher=inference_batcher,
@@ -686,12 +655,47 @@ def train(flags):
     actor_model.load_state_dict(model.state_dict())
     D_eval.load_state_dict(D.state_dict())
 
+    def reward_func(p):
+        p = F.relu(p)
+        return (p + 1e-12).log() - (1 - p + 1e-12).log()
+
+    if flags.use_tca:
+
+        def reward_function(D, env_outputs, new_frame):
+            obs, reward, *_ = env_outputs
+            frame = obs["canvas"][:-1]
+
+            frame, new_frame = nest.map(
+                lambda t: normalize(torch.flatten(t, 0, 1)), (frame, new_frame)
+            )
+
+            with torch.no_grad():
+                r = D(new_frame) - D(frame)
+                reward[1:] += reward_func(r).view(-1, flags.batch_size)
+                return reward
+
+    else:
+
+        def reward_function(D, env_outputs, new_frame):
+            obs, reward, done, *_ = env_outputs
+
+            index = done[1:].nonzero()
+
+            new_frame = normalize(new_frame[index[:, 0], index[:, 1]])
+
+            T, B, *_ = new_frame.shape
+            with torch.no_grad():
+                r = D(new_frame)
+                reward[index[:, 0], index[:, 1]] += reward_func(r)
+                return reward
+
     learner_threads = [
         threading.Thread(
             target=learn,
             name="learner-thread-%i" % i,
             args=(
                 flags,
+                reward_function,
                 learner_queue,
                 model,
                 actor_model,

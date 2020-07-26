@@ -54,7 +54,6 @@ class EnvServer {
       bool done = true;
       int episode_step = 0;
       float episode_return = 0.0;
-      bool reset = false;
 
       auto set_observation = py::cpp_function(
           [&observation](PyArrayNest o) { observation = std::move(o); },
@@ -100,33 +99,45 @@ class EnvServer {
         }
         try {
           // I'm not sure if this is fast, but it's convienient.
-	  if (reset) {
-	    set_observation(resetfunc());
-            // Reset episode_* for the _next_ step.
-	    reward = 0.0;
-            done = true;
-            episode_step = 0;
-            episode_return = 0.0;
-	    reset = false;
-	  } else { 
-	    set_observation_reward_done(*stepfunc(nest_pb_to_nest(
-	        action_pb.mutable_nest_action(), array_pb_to_nest)));
+	  set_observation_reward_done(*stepfunc(nest_pb_to_nest(
+	      action_pb.mutable_nest_action(), array_pb_to_nest)));
 
-            episode_step += 1;
-            episode_return += reward;
-
-	    if (done) {
-              reset = true;
-	      done = false;
-	    }
-
-	  }
+          episode_step += 1;
+          episode_return += reward;
 
           step_pb.Clear();
           step_pb.set_reward(reward);
           step_pb.set_done(done);
           step_pb.set_episode_step(episode_step);
           step_pb.set_episode_return(episode_return);
+        } catch (const pybind11::error_already_set &e) {
+          std::cerr << e.what() << std::endl;
+          return grpc::Status(grpc::INTERNAL, e.what());
+        }
+
+        fill_nest_pb(step_pb.mutable_observation(), std::move(observation),
+                     fill_ndarray_pb);
+
+	try {
+	  if (done) {
+            {
+              py::gil_scoped_release release;  // Release while doing transfer.
+              stream->Write(step_pb);
+            }
+
+	    set_observation(resetfunc());
+
+            // Reset episode_* for the _next_ step.
+	    reward = 0.0;
+            episode_step = 0;
+            episode_return = 0.0;
+
+            step_pb.Clear();
+            step_pb.set_reward(reward);
+            step_pb.set_done(done);
+            step_pb.set_episode_step(episode_step);
+            step_pb.set_episode_return(episode_return);
+	  }
         } catch (const pybind11::error_already_set &e) {
           std::cerr << e.what() << std::endl;
           return grpc::Status(grpc::INTERNAL, e.what());
