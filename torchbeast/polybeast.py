@@ -281,14 +281,6 @@ def learn(
         env_outputs, actor_outputs = batch
         obs, reward, done, step, _ = env_outputs
 
-        index = done[1:].nonzero()
-        print(done)
-        print(torch.mean(obs["canvas"], dim=(2, 3, 4)))
-        print(torch.mean(new_frame, dim=(2, 3, 4)))
-        if new_frame.size():
-            print(new_frame.shape)
-        print(torch.mean(new_frame[index[:, 0], index[:, 1]], dim=(1, 2, 3)))
-
         lock.acquire()  # Only one thread learning at a time.
 
         if flags.use_tca or done.any().item():
