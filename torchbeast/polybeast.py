@@ -113,8 +113,6 @@ parser.add_argument("--condition", action="store_true",
                     help='condition flag')
 parser.add_argument("--use_tca", action="store_true",
                     help="temporal credit assignment flag")
-parser.add_argument("--power_iters", default=20, type=int, metavar="N",
-                    help="Spectral normalization power iterations")
 parser.add_argument("--dataset", default="celeba-hq",
                     help="Dataset name. MNIST, Omniglot, CelebA, CelebA-HQ is supported")
 
@@ -174,7 +172,7 @@ def compute_policy_gradient_loss(logits, actions, advantages):
     for logit, action in zip(logits, actions):
         cross_entropy += F.nll_loss(
             F.log_softmax(torch.flatten(logit, 0, 1), dim=-1),
-            target=torch.flatten(action.long(), 0, 1).squeeze(dim=-1),
+            target=torch.flatten(action.long(), 0, 1),
             reduction="none",
         )
     cross_entropy = cross_entropy.view_as(advantages)
@@ -247,6 +245,11 @@ def normalize(frame):
     return (frame - 0.5) / 0.5
 
 
+def reward_func(p):
+    p = F.relu(p)
+    return (p + 1e-12).log() - (1 - p + 1e-12).log()
+
+
 EnvOutput = collections.namedtuple(
     "EnvOutput", "obs, reward, done, episode_step episode_return"
 )
@@ -256,7 +259,6 @@ Batch = collections.namedtuple("Batch", "env agent")
 
 def learn(
     flags,
-    reward_function,
     learner_queue,
     model,
     actor_model,
@@ -281,12 +283,43 @@ def learn(
         env_outputs, actor_outputs = batch
         obs, reward, done, step, _ = env_outputs
 
+        if flags.use_tca:
+            env_outputs = list(env_outputs)
+
+            frame = obs["canvas"][:-1]
+
+            frame, new_frame = nest.map(
+                lambda t: normalize(torch.flatten(t, 0, 1)), (frame, new_frame)
+            )
+
+        else:
+            if done.any().item():
+                env_outputs = list(env_outputs)
+
+                index = done[1:].nonzero()
+
+                new_frame = normalize(new_frame[index[:, 0], index[:, 1]])
+
         lock.acquire()  # Only one thread learning at a time.
 
-        if flags.use_tca or done.any().item():
-            env_outputs = list(env_outputs)
-            env_outputs[1] = reward_function(D, env_outputs, new_frame)
+        if flags.use_tca:
+            with torch.no_grad():
+                discriminator_reward = reward_func(D(new_frame) - D(frame)).view(
+                    -1, flags.batch_size
+                )
+                reward[1:] += discriminator_reward
+
+            env_outputs[1] = reward
             batch = (tuple(env_outputs), actor_outputs)
+
+        else:
+            if done.any().item():
+                with torch.no_grad():
+                    discriminator_reward = reward_func(D(new_frame))
+                    reward[index[:, 0], index[:, 1]] += discriminator_reward
+
+                env_outputs[1] = reward
+                batch = (tuple(env_outputs), actor_outputs)
 
         optimizer.zero_grad()
 
@@ -356,7 +389,7 @@ def learn(
         stats["step"] = stats.get("step", 0) + flags.unroll_length * flags.batch_size
         stats["episode_returns"] = tuple(episode_returns.cpu().numpy())
         stats["mean_episode_return"] = torch.mean(episode_returns).item()
-        # stats["mean_discriminator_returns"] = discriminator_returns
+        stats["mean_discriminator_returns"] = torch.mean(discriminator_reward).item()
         stats["total_loss"] = total_loss.item()
         stats["pg_loss"] = pg_loss.item()
         stats["baseline_loss"] = baseline_loss.item()
@@ -414,6 +447,7 @@ def learn_D(
             nn.utils.clip_grad_norm_(D.parameters(), flags.grad_norm_clipping)
 
             obs = next(replay_queue)
+
             replay_buffer.push(obs["canvas"].squeeze(0))
 
             while len(replay_buffer) < flags.batch_size:
@@ -560,12 +594,11 @@ def train(flags):
     actor_model.to(device=flags.actor_device)
 
     if flags.condition:
-        D = models.ComplementDiscriminator(obs_shape, flags.power_iters)
+        D = models.ComplementDiscriminator(obs_shape)
     else:
-        D = models.Discriminator(obs_shape, flags.power_iters)
+        D = models.Discriminator(obs_shape)
     D.to(device=flags.learner_device)
 
-    # custom weights initialization called on netG and netD
     def weights_init(m):
         classname = m.__class__.__name__
         if classname.find("Conv") != -1:
@@ -577,9 +610,9 @@ def train(flags):
     D.apply(weights_init)
 
     if flags.condition:
-        D_eval = models.ComplementDiscriminator(obs_shape, flags.power_iters)
+        D_eval = models.ComplementDiscriminator(obs_shape)
     else:
-        D_eval = models.Discriminator(obs_shape, flags.power_iters)
+        D_eval = models.Discriminator(obs_shape)
     D_eval = D_eval.to(device=flags.learner_device).eval()
 
     optimizer = optim.Adam(model.parameters(), lr=flags.policy_learning_rate)
@@ -647,47 +680,12 @@ def train(flags):
     actor_model.load_state_dict(model.state_dict())
     D_eval.load_state_dict(D.state_dict())
 
-    def reward_func(p):
-        p = F.relu(p)
-        return (p + 1e-12).log() - (1 - p + 1e-12).log()
-
-    if flags.use_tca:
-
-        def reward_function(D, env_outputs, new_frame):
-            obs, reward, *_ = env_outputs
-            frame = obs["canvas"][:-1]
-
-            frame, new_frame = nest.map(
-                lambda t: normalize(torch.flatten(t, 0, 1)), (frame, new_frame)
-            )
-
-            with torch.no_grad():
-                r = D(new_frame) - D(frame)
-                reward[1:] += reward_func(r).view(-1, flags.batch_size)
-                return reward
-
-    else:
-
-        def reward_function(D, env_outputs, new_frame):
-            obs, reward, done, *_ = env_outputs
-
-            index = done[1:].nonzero()
-
-            new_frame = normalize(new_frame[index[:, 0], index[:, 1]])
-
-            T, B, *_ = new_frame.shape
-            with torch.no_grad():
-                r = D(new_frame)
-                reward[index[:, 0], index[:, 1]] += reward_func(r)
-                return reward
-
     learner_threads = [
         threading.Thread(
             target=learn,
             name="learner-thread-%i" % i,
             args=(
                 flags,
-                reward_function,
                 learner_queue,
                 model,
                 actor_model,

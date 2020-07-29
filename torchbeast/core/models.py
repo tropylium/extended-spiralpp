@@ -302,7 +302,7 @@ class ResBlock(nn.Module):
 
 
 class Discriminator(nn.Module):
-    def __init__(self, obs_shape, power_iters):
+    def __init__(self, obs_shape):
         super(Discriminator, self).__init__()
         c, h, w = obs_shape
 
@@ -330,7 +330,7 @@ class Discriminator(nn.Module):
 
         for module in self.main.modules():
             if isinstance(module, nn.Conv2d) or isinstance(module, nn.BatchNorm2d):
-                nn.utils.spectral_norm(module, n_power_iterations=power_iters)
+                nn.utils.spectral_norm(module)
 
     def forward(self, obs):
         x = self.main(obs)
