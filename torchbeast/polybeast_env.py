@@ -17,12 +17,11 @@ import os
 import argparse
 import multiprocessing as mp
 import time
-import ast
 
 from torch.utils.data import Subset
+import libtorchbeast
 
 from torchbeast import utils
-from libtorchbeast import rpcenv
 
 # yapf: disable
 parser = argparse.ArgumentParser(description='Remote Environment Server')
@@ -47,8 +46,8 @@ parser.add_argument("--canvas_width", type=int, default=256, metavar="W",
                     help="Set canvas render width")
 parser.add_argument("--brush_type", type=str, default="classic/dry_brush",
                     help="Set brush type from brush dir")
-parser.add_argument("--brush_sizes",
-                    default=[1, 2, 4, 6, 12, 24],
+parser.add_argument("--brush_sizes", nargs='+', type=int,
+                    default=[1, 2, 4, 8, 12, 24],
                     help="Set brush_sizes float is allowed")
 parser.add_argument("--use_color", action="store_true",
                     help="use_color flag")
@@ -70,17 +69,11 @@ parser.add_argument("--dataset",
 
 def serve(env_name, config, grayscale, dataset, server_address):
     init = lambda: utils.create_env(env_name, config, grayscale, dataset)
-    server = rpcenv.Server(init, server_address=server_address)
+    server = libtorchbeast.Server(init, server_address=server_address)
     server.run()
 
 
-if __name__ == "__main__":
-    flags = parser.parse_args()
-
-    # convert string to list
-    if isinstance(flags.brush_sizes, str):
-        flags.brush_sizes = ast.literal_eval(flags.brush_sizes)
-
+def main(flags):
     env_name, config = utils.parse_flags(flags)
 
     if not flags.pipes_basename.startswith("unix:"):
@@ -123,3 +116,8 @@ if __name__ == "__main__":
             time.sleep(10)
     except KeyboardInterrupt:
         pass
+
+
+if __name__ == "__main__":
+    flags = parser.parse_args()
+    main(flags)
