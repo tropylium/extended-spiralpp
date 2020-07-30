@@ -295,7 +295,7 @@ def learn(
             if done.any().item():
                 env_outputs = list(env_outputs)
 
-                index = done[1:].nonzero()
+                index = done[1:].nonzero(as_tuple=False)
 
                 new_frame = normalize(new_frame[index[:, 0], index[:, 1]])
 
