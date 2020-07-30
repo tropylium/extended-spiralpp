@@ -56,6 +56,8 @@ ENV BASH_ENV /root/.bashrc
 # Clone Spiralpp.
 RUN git clone https://github.com/urw7rs/spiralpp.git
 
+WORKDIR /src/spiralpp
+
 # install spiral env
 RUN git submodule update --init --recursive \
     && wget -c https://github.com/mypaint/mypaint-brushes/archive/v1.3.0.tar.gz -O - | tar -xz -C third_party \
