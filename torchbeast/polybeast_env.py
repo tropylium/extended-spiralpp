@@ -17,7 +17,6 @@ import os
 import argparse
 import multiprocessing as mp
 import time
-import ast
 
 from torch.utils.data import Subset
 import libtorchbeast
@@ -76,10 +75,6 @@ def serve(env_name, config, grayscale, dataset, server_address):
 
 def main(flags):
     env_name, config = utils.parse_flags(flags)
-
-    # convert string to list
-    if isinstance(flags.brush_sizes, str):
-        flags.brush_sizes = ast.literal_eval(flags.brush_sizes)
 
     if not flags.pipes_basename.startswith("unix:"):
         raise Exception("--pipes_basename has to be of the form unix:/some/path.")
