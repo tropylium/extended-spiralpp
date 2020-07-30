@@ -30,16 +30,15 @@ os.environ["OMP_NUM_THREADS"] = "1"  # Necessary for multithreading.
 import nest
 import torch
 import torch.optim as optim
-from libtorchbeast import actorpool
-
+import libtorchbeast
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
+import numpy as np
+
 import gym
 from gym import spaces
-
-import numpy as np
 
 from torchbeast import utils
 from torchbeast.core import file_writer
@@ -508,7 +507,7 @@ def train(flags):
     # The queue the learner threads will get their data from.
     # Setting `minimum_batch_size == maximum_batch_size`
     # makes the batch size static.
-    learner_queue = actorpool.BatchingQueue(
+    learner_queue = libtorchbeast.BatchingQueue(
         batch_dim=1,
         minimum_batch_size=flags.batch_size,
         maximum_batch_size=flags.batch_size,
@@ -519,7 +518,7 @@ def train(flags):
     # The queue the actorpool stores final render image pairs.
     # A seperate thread will load them to the ReplayBuffer.
     # The batch size of the pairs will be dynamic.
-    replay_queue = actorpool.BatchingQueue(
+    replay_queue = libtorchbeast.BatchingQueue(
         batch_dim=1,
         minimum_batch_size=1,
         maximum_batch_size=flags.num_actors,
@@ -536,7 +535,7 @@ def train(flags):
     # The "batcher", a queue for the inference call. Will yield
     # "batch" objects with `get_inputs` and `set_outputs` methods.
     # The batch size of the tensors will be dynamic.
-    inference_batcher = actorpool.DynamicBatcher(
+    inference_batcher = libtorchbeast.DynamicBatcher(
         batch_dim=1,
         minimum_batch_size=1,
         maximum_batch_size=512,
@@ -631,7 +630,7 @@ def train(flags):
     D_scheduler = torch.optim.lr_scheduler.LambdaLR(D_optimizer, lr_lambda)
 
     # The ActorPool that will run `flags.num_actors` many loops.
-    actors = actorpool.ActorPool(
+    actors = libtorchbeast.ActorPool(
         unroll_length=flags.unroll_length,
         learner_queue=learner_queue,
         replay_queue=replay_queue,
@@ -815,8 +814,7 @@ def main(flags):
             f"--env_type={flags.env_type}",
             f"--episode_length={flags.episode_length}",
             f"--canvas_width={flags.canvas_width}",
-            "--brush_sizes",
-            *[str(i) for i in flags.brush_sizes],
+            f"--brush_sizes={flags.brush_sizes}",
             f"--new_stroke_penalty={flags.new_stroke_penalty}",
             f"--stroke_length_penalty={flags.stroke_length_penalty}",
             f"--dataset={flags.dataset}",

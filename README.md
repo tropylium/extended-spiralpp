@@ -1,5 +1,3 @@
-<<<<<<< HEAD
-
 # SPIRAL++
 
 A PyTorch implementation of [Unsupervised Doodling and Painting with Improved SPIRAL
@@ -92,7 +90,6 @@ Compile the C++ parts of PolyBeast:
 ```
 $ pip install nest/
 $ export LD_LIBRARY_PATH=${CONDA_PREFIX:-"$(dirname $(which conda))/../"}/lib:${LD_LIBRARY_PATH}
-$ python setup.py install
 ```
 
 ### Running PolyBeast
