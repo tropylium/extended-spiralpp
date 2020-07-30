@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:experimental
-FROM nvidia/cuda:10.2-cudnn7-runtime-ubuntu18.04
+FROM ubuntu:18.04
 
 SHELL ["/bin/bash", "-c"]
 
@@ -53,9 +53,12 @@ RUN echo "conda activate spiralpp" >> /root/.bashrc
 # Make bash excecute .bashrc even when running non-interactively.
 ENV BASH_ENV /root/.bashrc
 
-# Clone spiralpp.
-RUN git clone https://github.com/urw7rs/spiralpp.git 
+# Clone Spiralpp.
 WORKDIR /src/spiralpp
+
+COPY .git /src/spiralpp/.git
+
+RUN git reset --hard
 
 # install spiral env
 RUN git submodule update --init --recursive \
@@ -64,7 +67,6 @@ RUN git submodule update --init --recursive \
     && patch third_party/paint/shaders/setbristles.frag third_party/paint-setbristles.patch
 
 WORKDIR /src/spiralpp/spiral-envs
-
 RUN pip install --no-cache-dir six scipy
 
 RUN patch setup.py setup.patch && patch CMakeLists.txt cmakelists.patch
@@ -80,10 +82,10 @@ RUN pip install -e .
 # # # (https://github.com/pytorch/pytorch/issues/1022)
 # # RUN pip download torch
 # # RUN pip install torch*.whl
-#
+
 WORKDIR /src
 
-RUN git clone --single-branch --branch v1.5.1 --recursive https://github.com/pytorch/pytorch
+RUN git clone --single-branch --branch v1.6.0 --recursive https://github.com/pytorch/pytorch
 
 WORKDIR /src/pytorch
 
@@ -93,14 +95,13 @@ RUN python setup.py install
 
 WORKDIR /src
 
-RUN git clone --single-branch --branch v0.5.1 https://github.com/pytorch/vision.git
+RUN git clone --single-branch --branch v0.7.0 https://github.com/pytorch/vision.git
 
 WORKDIR /src/vision 
 
 RUN python setup.py install
 
 WORKDIR /src/spiralpp
-
 # Collect and install grpc.
 RUN conda install protobuf
 RUN ./scripts/install_grpc.sh
@@ -114,7 +115,7 @@ RUN pip install -r requirements.txt
 # Compile libtorchbeast.
 ENV LD_LIBRARY_PATH ${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH}
 
-RUN python setup.py install
+RUN python setup.py build develop
 
 ENV OMP_NUM_THREADS 1
 

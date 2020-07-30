@@ -90,6 +90,7 @@ Compile the C++ parts of PolyBeast:
 ```
 $ pip install nest/
 $ export LD_LIBRARY_PATH=${CONDA_PREFIX:-"$(dirname $(which conda))/../"}/lib:${LD_LIBRARY_PATH}
+$ python setup.py build develop
 ```
 
 ### Running PolyBeast
