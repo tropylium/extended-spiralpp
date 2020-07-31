@@ -17,8 +17,6 @@ import argparse
 import collections
 import logging
 import os
-import signal
-import subprocess
 import threading
 import time
 import timeit
@@ -804,37 +802,6 @@ def main(flags):
     if not flags.pipes_basename.startswith("unix:"):
         raise Exception("--pipes_basename has to be of the form unix:/some/path.")
 
-    if flags.start_servers:
-        command = [
-            "python",
-            "-m",
-            "torchbeast.polybeast_env",
-            f"--num_servers={flags.num_actors}",
-            f"--pipes_basename={flags.pipes_basename}",
-            f"--env_type={flags.env_type}",
-            f"--episode_length={flags.episode_length}",
-            f"--canvas_width={flags.canvas_width}",
-            "--brush_sizes",
-            *[str(i) for i in flags.brush_sizes],
-            f"--new_stroke_penalty={flags.new_stroke_penalty}",
-            f"--stroke_length_penalty={flags.stroke_length_penalty}",
-            f"--dataset={flags.dataset}",
-        ]
-
-        if flags.env_type == "libmypaint":
-            command.append(f"--brush_type={flags.brush_type}")
-        if flags.use_pressure:
-            command.append("--use_pressure")
-        if flags.condition:
-            command.append("--condition")
-        if flags.use_compound:
-            command.append("--use_compound")
-        if flags.use_color:
-            command.append("--use_color")
-
-        logging.info("Starting servers with command: " + " ".join(command))
-        server_proc = subprocess.Popen(command)
-
     if flags.mode == "train":
         if flags.write_profiler_trace:
             logging.info("Running with profiler.")
@@ -848,10 +815,6 @@ def main(flags):
             train(flags)
     else:
         test(flags)
-
-    if flags.start_servers:
-        # Send Ctrl-c to servers.
-        server_proc.send_signal(signal.SIGINT)
 
 
 if __name__ == "__main__":
