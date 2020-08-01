@@ -166,10 +166,10 @@ def compute_entropy_loss(logits):
 
 def compute_policy_gradient_loss(logits, actions, advantages):
     cross_entropy = 0
-    for logit, action in zip(logits, actions):
+    for i, logit in enumerate(logits):
         cross_entropy += F.nll_loss(
             F.log_softmax(torch.flatten(logit, 0, 1), dim=-1),
-            target=torch.flatten(action.long(), 0, 1),
+            target=torch.flatten(actions[..., i].long(), 0, 1),
             reduction="none",
         )
     cross_entropy = cross_entropy.view_as(advantages)
@@ -222,7 +222,7 @@ def inference(flags, inference_batcher, model, lock=threading.Lock()):
         for batch in inference_batcher:
             batched_env_outputs, agent_state = batch.get_inputs()
 
-            obs, _, done, step, _ = batched_env_outputs
+            obs, _, done, *_ = batched_env_outputs
 
             obs, done, agent_state = nest.map(
                 lambda t: t.to(flags.actor_device, non_blocking=True),
@@ -341,12 +341,10 @@ def learn(
 
         discounts = (~env_outputs.done).float() * flags.discounting
 
-        action = actor_outputs.action.unbind(dim=2)
-
         vtrace_returns = vtrace.from_logits(
             behavior_policy_logits=actor_outputs.policy_logits,
             target_policy_logits=learner_outputs.policy_logits,
-            actions=action,
+            actions=actor_outputs.action,
             discounts=discounts,
             rewards=env_outputs.reward,
             values=learner_outputs.baseline,
@@ -361,7 +359,9 @@ def learn(
         vtrace_returns = vtrace.VTraceFromLogitsReturns._make(vtrace_returns)
 
         pg_loss = compute_policy_gradient_loss(
-            learner_outputs.policy_logits, action, vtrace_returns.pg_advantages,
+            learner_outputs.policy_logits,
+            actor_outputs.action,
+            vtrace_returns.pg_advantages,
         )
         baseline_loss = flags.baseline_cost * compute_baseline_loss(
             vtrace_returns.vs - learner_outputs.baseline

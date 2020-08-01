@@ -50,9 +50,10 @@ VTraceFromLogitsReturns = collections.namedtuple(
 VTraceReturns = collections.namedtuple("VTraceReturns", "vs pg_advantages")
 
 
-def action_log_probs(policy_logits, action):
+def action_log_probs(policy_logits, actions):
     log_prob = 0
-    for logit, action in zip(policy_logits, action):
+    for i, logit in enumerate(policy_logits):
+        action = actions[..., i]
         log_prob += -F.nll_loss(
             F.log_softmax(torch.flatten(logit, 0, 1), dim=-1),
             torch.flatten(action.long(), 0, 1),

@@ -27,8 +27,6 @@ class Net(nn.Module):
         c, h, w = obs_shape
         assert h == 64 and w == 64
 
-        self.register_buffer("grid", self._grid(h, w))
-
         self.obs = nn.Conv2d(c + 2, 32, 5, 1, 2)
 
         self.mask_mlp = MaskMLP(action_shape, grid_shape)
@@ -74,23 +72,23 @@ class Net(nn.Module):
         self.policy = Decoder(action_shape, grid_shape)
         self.baseline = nn.Linear(256, 1)
 
-    def _grid(self, w, h):
-        x_grid = torch.linspace(-1, 1, w)
-        x_grid = x_grid.view(1, 1, 1, w)
-        x_grid = x_grid.repeat(1, 1, w, 1)
-
+    def _grid(self, batch, h, w):
         y_grid = torch.linspace(-1, 1, h)
         y_grid = y_grid.view(1, 1, h, 1)
-        y_grid = y_grid.repeat(1, 1, 1, h)
+        y_grid = y_grid.repeat(batch, 1, 1, h)
+
+        x_grid = torch.linspace(-1, 1, w)
+        x_grid = x_grid.view(1, 1, 1, w)
+        x_grid = x_grid.repeat(batch, 1, w, 1)
 
         return torch.cat([y_grid, x_grid], dim=1)
 
     def initial_state(self, batch_size=1):
-        return tuple(torch.zeros(1, batch_size, 256) for _ in range(2))
+        return tuple(torch.ones(1, batch_size, 256) for _ in range(2))
 
     def forward(self, obs, done, core_state):
-        T, B, *_ = obs["canvas"].shape
-        grid = self.grid.repeat(T * B, 1, 1, 1)
+        T, B, C, H, W = obs["canvas"].shape
+        grid = self._grid(T * B, H, W)
 
         notdone = (~done).float()
         obs["prev_action"] = obs["prev_action"] * notdone.unsqueeze(dim=2)
@@ -152,7 +150,7 @@ class Decoder(nn.Module):
         self.decode = nn.ModuleList(modules)
 
         modules = []
-        for i, shape in enumerate(action_shape):
+        for i, shape in enumerate(action_shape[:-1]):
             if i < 2:
                 module = Location(grid_shape)
             else:
@@ -170,11 +168,12 @@ class Decoder(nn.Module):
             for i in range(self.num_actions):
                 logit = self.decode[i](h)
 
-                concat = torch.cat(
-                    [h, self.mlp[i](actions[:, i : i + 1].float())], dim=1
-                )
-                residual = self.concat_fc(concat)
-                h = self.relu(h + residual)
+                if i != self.num_actions - 1:
+                    concat = torch.cat(
+                        [h, self.mlp[i](actions[:, i : i + 1].float())], dim=1
+                    )
+                    residual = self.concat_fc(concat)
+                    h = self.relu(h + residual)
 
                 logits.append(logit)
 
@@ -185,9 +184,10 @@ class Decoder(nn.Module):
                 logit = self.decode[i](h)
                 action = torch.multinomial(F.softmax(logit, dim=1), num_samples=1)
 
-                concat = torch.cat([h, self.mlp[i](action.float())], dim=1)
-                residual = self.concat_fc(concat)
-                h = self.relu(h + residual)
+                if i != self.num_actions - 1:
+                    concat = torch.cat([h, self.mlp[i](action.float())], dim=1)
+                    residual = self.concat_fc(concat)
+                    h = self.relu(h + residual)
 
                 actions.append(action)
                 logits.append(logit)
@@ -340,15 +340,18 @@ class Discriminator(nn.Module):
 class ComplementDiscriminator(Discriminator, nn.Module):
     def __init__(self, obs_shape, power_iters):
         super(ComplementDiscriminator, self).__init__(obs_shape, power_iters)
-        c, h, w = obs_shape
+        self.obs_shape = obs_shape
+
+    def _mask(self):
+        c, h, w = self.obs_shape
         left = torch.ones(1, c // 2, h, w // 2)
         right = torch.zeros(1, c // 2, h, w // 2)
         mask = torch.cat([left, right], dim=-1)
         mask = torch.cat([1 - mask, mask], dim=1)
-        self.register_buffer("mask", mask)
+        return mask
 
     def forward(self, obs):
-        x = self.main(obs * self.mask)
+        x = self.main(obs * self._mask)
         if self.training:
             return x
         else:
