@@ -143,8 +143,10 @@ class EnvServer {
           return grpc::Status(grpc::INTERNAL, e.what());
         }
 
-        fill_nest_pb(step_pb.mutable_observation(), std::move(observation),
-                     fill_ndarray_pb);
+	if (done) {
+          fill_nest_pb(step_pb.mutable_observation(), std::move(observation),
+                       fill_ndarray_pb);
+	}
       }
       return grpc::Status::OK;
     }
