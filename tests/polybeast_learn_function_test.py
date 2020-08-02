@@ -59,14 +59,17 @@ class LearnTest(unittest.TestCase):
         self.D = models.Discriminator(obs_shape)
         self.D_eval = models.Discriminator(obs_shape).eval()
 
-        D_optimizer = torch.optim.Adam(self.D.parameters(), lr=self.lr)
+        self.initial_D_dict = copy.deepcopy(self.D.state_dict())
+        self.initial_D_eval_dict = copy.deepcopy(self.D_eval.state_dict())
+
+        D_optimizer = torch.optim.SGD(self.D.parameters(), lr=self.lr)
 
         scheduler = torch.optim.lr_scheduler.StepLR(
             optimizer, step_size=total_steps // 10
         )
 
         D_scheduler = torch.optim.lr_scheduler.StepLR(
-            optimizer, step_size=total_steps // 10
+            D_optimizer, step_size=total_steps // 10
         )
 
         self.stats = {}
@@ -160,18 +163,27 @@ class LearnTest(unittest.TestCase):
             plogger,
         )
 
+        new_frame["canvas"] = torch.ones(
+            1, 1, num_channels, frame_dimension, frame_dimension
+        )
         # Mock replay_queue.
         mock_replay_queue = mock.MagicMock()
-        mock_replay_queue.__iter__.return_value = iter(
-            [new_frame for _ in range(batch_size)]
-        )
+        mock_replay_queue.__next__ = mock.MagicMock(return_value=new_frame)
+        mock_replay_queue.is_closed = mock.MagicMock(side_effect=[False, True])
 
         # Mock dataloader.
         mock_dataloader = mock.MagicMock()
         mock_dataloader.__iter__.return_value = iter(
-            [torch.ones(batch_size, num_channels, frame_dimension, frame_dimension)]
+            [
+                (
+                    torch.ones(
+                        batch_size, num_channels, frame_dimension, frame_dimension
+                    ),
+                    None,
+                )
+            ]
         )
-        replay_buffer = polybeast.ReplayBuffer(batch_size * 2)
+        replay_buffer = polybeast.ReplayBuffer(batch_size)
 
         self.learn_D_args = (
             mock_flags,
@@ -197,6 +209,19 @@ class LearnTest(unittest.TestCase):
         np.testing.assert_equal(
             _state_dict_to_numpy(self.actor_model.state_dict()),
             _state_dict_to_numpy(self.model.state_dict()),
+        )
+
+    def test_parameters_copied_to_D_eval(self):
+        """Check that the learner model copies the parameters to the actor model."""
+        # Reset models.
+        self.D.load_state_dict(self.initial_D_dict)
+        self.D_eval.load_state_dict(self.initial_D_eval_dict)
+
+        polybeast.learn_D(*self.learn_D_args)
+
+        np.testing.assert_equal(
+            _state_dict_to_numpy(self.D.state_dict()),
+            _state_dict_to_numpy(self.D_eval.state_dict()),
         )
 
     def test_weights_update(self):
@@ -235,6 +260,44 @@ class LearnTest(unittest.TestCase):
                 actor_model_tensor.detach().numpy(), expected_tensor
             )
 
+    def test_D_weights_update(self):
+        """Check that trainable parameters get updated after one iteration."""
+        # Reset models.
+        self.D.load_state_dict(self.initial_D_dict)
+        self.D_eval.load_state_dict(self.initial_D_eval_dict)
+
+        polybeast.learn_D(*self.learn_D_args)
+
+        D_state_dict = self.D.state_dict(keep_vars=True)
+        D_eval_state_dict = self.D_eval.state_dict(keep_vars=True)
+
+        for key, initial_tensor in self.initial_D_dict.items():
+            D_tensor = D_state_dict[key]
+            D_eval_tensor = D_eval_state_dict[key]
+            # Assert that the gradient is not zero for the learner.
+            # skip spectral norm weights.
+            if key[-1] in ["v", "u"]:
+                continue
+            self.assertGreater(torch.norm(D_tensor.grad), 0.0)
+            # Assert actor has no gradient.
+            # Note that even though actor model tensors have no gradient,
+            # they have requires_grad == True. No gradients are ever calculated
+            # for these tensors because the inference function in polybeast.py
+            # (that performs forward passes with the actor_model) uses torch.no_grad
+            # context manager.
+            self.assertIsNone(D_eval_tensor.grad)
+            # Assert that the weights are updated in the expected way.
+            # We manually perform a gradient descent step,
+            # and check that they are the same as the calculated ones
+            # (ignoring floating point errors).
+            expected_tensor = (
+                initial_tensor.detach().numpy() - self.lr * D_tensor.grad.numpy()
+            )
+            np.testing.assert_almost_equal(D_tensor.detach().numpy(), expected_tensor)
+            np.testing.assert_almost_equal(
+                D_eval_tensor.detach().numpy(), expected_tensor
+            )
+
     def test_gradients_update(self):
         """Check that gradients get updated after one iteration."""
         # Reset models.
@@ -259,6 +322,30 @@ class LearnTest(unittest.TestCase):
         for p in self.actor_model.parameters():
             self.assertIsNone(p.grad)
 
+    def test_D_gradients_update(self):
+        """Check that gradients get updated after one iteration."""
+        # Reset models.
+        self.D.load_state_dict(self.initial_D_dict)
+        self.D_eval.load_state_dict(self.initial_D_eval_dict)
+
+        # There should be no calculated gradient yet.
+        for p in self.D.parameters():
+            self.assertIsNone(p.grad)
+        for p in self.D_eval.parameters():
+            self.assertIsNone(p.grad)
+
+        polybeast.learn_D(*self.learn_D_args)
+
+        # Check that every parameter for the learner model has a gradient, and that
+        # there is at least some non-zero gradient for each set of paramaters.
+        for p in self.D.parameters():
+            self.assertIsNotNone(p.grad)
+            self.assertFalse(torch.equal(p.grad, torch.zeros_like(p.grad)))
+
+        # Check that the actor model has no gradients associated with it.
+        for p in self.D_eval.parameters():
+            self.assertIsNone(p.grad)
+
     def test_non_zero_loss(self):
         """Check that the loss is not zero after one iteration."""
         # Reset models.
@@ -272,7 +359,18 @@ class LearnTest(unittest.TestCase):
         self.assertNotEqual(self.stats["baseline_loss"], 0.0)
         self.assertNotEqual(self.stats["entropy_loss"], 0.0)
 
+    def test_D_non_zero_loss(self):
+        """Check that the loss is not zero after one iteration."""
+        # Reset models.
+        self.D.load_state_dict(self.initial_D_dict)
+        self.D_eval.load_state_dict(self.initial_D_eval_dict)
+
+        polybeast.learn_D(*self.learn_D_args)
+
+        self.assertNotEqual(self.stats["D_loss"], 0.0)
+        self.assertNotEqual(self.stats["fake_loss"], 0.0)
+        self.assertNotEqual(self.stats["real_loss"], 0.0)
+
 
 if __name__ == "__main__":
-    unittest.main()
     unittest.main()
