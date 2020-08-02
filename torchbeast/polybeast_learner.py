@@ -232,9 +232,7 @@ def inference(flags, inference_batcher, model, lock=threading.Lock()):
                 outputs = model(obs, done, agent_state)
 
             outputs = nest.map(lambda t: t.cpu(), outputs)
-            core_output, core_state = outputs
-
-            batch.set_outputs((core_output, core_state))
+            batch.set_outputs(outputs)
 
 
 def normalize(frame):

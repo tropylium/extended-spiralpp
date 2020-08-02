@@ -52,7 +52,7 @@ def main():
     run_learner(flags)
 
     for p in env_processes:
-        p.join()
+        p.terminate()
 
 
 if __name__ == "__main__":
