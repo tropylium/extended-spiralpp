@@ -35,7 +35,6 @@ from torch.utils.data import DataLoader
 
 import numpy as np
 
-import gym
 from gym import spaces
 
 from torchbeast import utils
@@ -567,7 +566,7 @@ def train(flags):
     if flags.condition:
         new_space = env.observation_space.spaces
         c, h, w = new_space["canvas"].shape
-        new_space["canvas"] = gym.spaces.Box(
+        new_space["canvas"] = spaces.Box(
             low=0, high=255, shape=(c * 2, h, w), dtype=np.uint8
         )
         env.observation_space = spaces.Dict(new_space)
