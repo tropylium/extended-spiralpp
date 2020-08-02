@@ -422,7 +422,7 @@ def learn_D(
     stats,
     plogger,
 ):
-    while True:
+    while not replay_queue.is_closed():
         for real, _ in dataloader:
             real = real.to(flags.learner_device, non_blocking=True)
 
@@ -721,7 +721,6 @@ def train(flags):
             plogger,
         ),
     )
-    d_learner.daemon = True
 
     actorpool_thread.start()
 
@@ -787,6 +786,8 @@ def train(flags):
     # Done with learning. Stop all the ongoing work.
     inference_batcher.close()
     learner_queue.close()
+
+    replay_queue.close()
 
     actorpool_thread.join()
 
