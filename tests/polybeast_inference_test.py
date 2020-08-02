@@ -71,7 +71,7 @@ class InferenceTest(unittest.TestCase):
             grid_shape=self.grid_shape,
         )
         model.to(device)
-        agent_state = model.initial_state()
+        agent_state = model.initial_state(self.batch_size)
 
         inputs = (
             (

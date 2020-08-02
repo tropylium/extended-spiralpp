@@ -57,8 +57,15 @@ class LearnTest(unittest.TestCase):
         optimizer = torch.optim.SGD(self.model.parameters(), lr=self.lr)
 
         self.D = models.Discriminator(obs_shape)
+        self.D_eval = models.Discriminator(obs_shape).eval()
+
+        D_optimizer = torch.optim.Adam(self.D.parameters(), lr=self.lr)
 
         scheduler = torch.optim.lr_scheduler.StepLR(
+            optimizer, step_size=total_steps // 10
+        )
+
+        D_scheduler = torch.optim.lr_scheduler.StepLR(
             optimizer, step_size=total_steps // 10
         )
 
@@ -146,9 +153,35 @@ class LearnTest(unittest.TestCase):
             mock_learner_queue,
             self.model,
             self.actor_model,
-            self.D,
+            self.D_eval,
             optimizer,
             scheduler,
+            self.stats,
+            plogger,
+        )
+
+        # Mock replay_queue.
+        mock_replay_queue = mock.MagicMock()
+        mock_replay_queue.__iter__.return_value = iter(
+            [new_frame for _ in range(batch_size)]
+        )
+
+        # Mock dataloader.
+        mock_dataloader = mock.MagicMock()
+        mock_dataloader.__iter__.return_value = iter(
+            [torch.ones(batch_size, num_channels, frame_dimension, frame_dimension)]
+        )
+        replay_buffer = polybeast.ReplayBuffer(batch_size * 2)
+
+        self.learn_D_args = (
+            mock_flags,
+            mock_dataloader,
+            mock_replay_queue,
+            replay_buffer,
+            self.D,
+            self.D_eval,
+            D_optimizer,
+            D_scheduler,
             self.stats,
             plogger,
         )
@@ -180,9 +213,6 @@ class LearnTest(unittest.TestCase):
             model_tensor = model_state_dict[key]
             actor_model_tensor = actor_model_state_dict[key]
             # Assert that the gradient is not zero for the learner.
-            if model_tensor.grad is None or torch.norm(model_tensor.grad) == 0:
-                print(key)
-                continue
             self.assertGreater(torch.norm(model_tensor.grad), 0.0)
             # Assert actor has no gradient.
             # Note that even though actor model tensors have no gradient,
@@ -244,4 +274,5 @@ class LearnTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    unittest.main()
     unittest.main()
