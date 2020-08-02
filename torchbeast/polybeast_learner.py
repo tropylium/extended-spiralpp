@@ -445,11 +445,11 @@ def learn_D(
 
             obs = next(replay_queue)
 
-            replay_buffer.push(obs["canvas"].squeeze(0))
+            replay_buffer.push(normalize(obs["canvas"]).squeeze(0))
 
             while len(replay_buffer) < flags.batch_size:
                 obs = next(replay_queue)
-                replay_buffer.push(((obs["canvas"] - 0.5) / 0.5).squeeze(0))
+                replay_buffer.push(normalize(obs["canvas"]).squeeze(0))
                 del obs
 
             fake = replay_buffer.sample(flags.batch_size).to(
