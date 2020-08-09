@@ -105,7 +105,7 @@ class Base(gym.Wrapper):
         h, w, c = new_space["canvas"].shape
 
         new_space["canvas"] = spaces.Box(
-            low=0, high=255, shape=(c, h, w), dtype=np.uint8
+            low=-1.0, high=1.0, shape=(c, h, w), dtype=np.float32
         )
         new_space.update(
             {
@@ -120,8 +120,10 @@ class Base(gym.Wrapper):
     def _convert_to_dict(self, action):
         return dict(zip(self.env.order, action.squeeze().tolist()))
 
-    def _to_NCHW(self, canvas):
-        return np.transpose(canvas, axes=(2, 0, 1)) / 255.0
+    def _preprocess(self, canvas):
+        nchw = np.transpose(canvas, axes=(2, 0, 1)) / 255.0
+        normalized = (nchw - 0.5) / 0.5
+        return normalized
 
     def _sample_noise(self, dims):
         return np.random.normal(size=(dims,)).astype(np.float32)
@@ -129,7 +131,7 @@ class Base(gym.Wrapper):
     def step(self, action):
         obs, reward, done, info = self.env.step(self._convert_to_dict(action))
         obs = obs.copy()
-        obs["canvas"] = self._to_NCHW(obs["canvas"])
+        obs["canvas"] = self._preprocess(obs["canvas"])
         obs["noise_sample"] = self.noise
         obs["prev_action"] = self.prev_action
         self.prev_action = action
@@ -138,7 +140,7 @@ class Base(gym.Wrapper):
     def reset(self):
         obs = self.env.reset()
         obs = obs.copy()
-        obs["canvas"] = self._to_NCHW(obs["canvas"])
+        obs["canvas"] = self._preprocess(obs["canvas"])
 
         self.noise = self._sample_noise(self.dim)
         obs["noise_sample"] = self.noise
@@ -170,7 +172,7 @@ class ConcatTarget(gym.Wrapper):
 
         c, h, w = new_space["canvas"].shape
         new_space["canvas"] = gym.spaces.Box(
-            low=0.0, high=1.0, shape=(c * 2, h, w), dtype=np.float32,
+            low=-1.0, high=1.0, shape=(c * 2, h, w), dtype=np.float32,
         )
         self.observation_space = spaces.Dict(new_space)
 

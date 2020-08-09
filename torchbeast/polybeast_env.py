@@ -29,8 +29,8 @@ parser = argparse.ArgumentParser(description='Remote Environment Server')
 parser.add_argument("--pipes_basename", default="unix:/tmp/polybeast",
                     help="Basename for the pipes for inter-process communication. "
                     "Has to be of the type unix:/some/path.")
-parser.add_argument("--num_servers", default=4, type=int, metavar='N',
-                    help='Number of environment servers.')
+parser.add_argument("--num_actors", default=4, type=int, metavar='N',
+                    help='Number of environment actors(servers).')
 
 BRUSHES_BASEDIR = os.path.join(os.getcwd(), "third_party/mypaint-brushes-1.3.0")
 BRUSHES_BASEDIR = os.path.abspath(BRUSHES_BASEDIR)
@@ -83,8 +83,8 @@ def main(flags):
     grayscale = dataset_uses_color and not flags.use_color
 
     if flags.condition:
-        dataset = utils.create_dataset(flags.dataset, grayscale, normalize=False)
-        per_actor = len(dataset) // flags.num_servers
+        dataset = utils.create_dataset(flags.dataset, grayscale)
+        per_actor = len(dataset) // flags.actors
 
     is_color = flags.use_color or flags.env_type == "fluid"
     if is_color is False:
@@ -93,7 +93,7 @@ def main(flags):
         grayscale = is_color and not dataset_uses_color
 
     processes = []
-    for i in range(flags.num_servers):
+    for i in range(flags.num_actors):
         if flags.condition:
             start = per_actor * i
             end = min(start + per_actor, len(dataset))

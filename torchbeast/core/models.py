@@ -133,19 +133,29 @@ class Decoder(nn.Module):
         self.num_actions = len(action_shape)
         modules = []
         action_shape = action_shape
+
+        def weights_init(m):
+            if isinstance(m, (nn.Conv2d, nn.Linear)):
+                nn.init.normal_(m.weight.data, 0.0, 0.01)
+                nn.init.normal_(m.bias.data, 0.0, 0.01)
+
         for i in range(self.num_actions):
             if i < 2:
-                module = nn.Sequential(
+                module = [
                     View(-1, 16, 4, 4),
                     nn.ConvTranspose2d(16, 32, 4, 2, 1),
                     *[ResBlock(32) for i in range(8)],
                     nn.ConvTranspose2d(32, 32, 4, 2, 1),
                     nn.ConvTranspose2d(32, 32, 4, 2, 1),
                     nn.Conv2d(32, 1, 3, 1, 1),
-                    View(-1, 32 * 32),
-                )
+                    nn.Flatten(1),
+                    # View(-1, 32 * 32),
+                ]
+                module[-2].apply(weights_init)
+                module = nn.Sequential(*module)
             else:
                 module = nn.Linear(256, action_shape[i])
+                module.apply(weights_init)
             modules.append(module)
         self.decode = nn.ModuleList(modules)
 
@@ -309,24 +319,34 @@ class Discriminator(nn.Module):
         ndf = 64
         self.main = nn.Sequential(
             # (c) x 64 x 64
-            nn.Conv2d(c, ndf, 4, 2, 1, bias=False),
-            nn.LeakyReLU(0.2, True),
+            nn.Conv2d(c, ndf, 3, 1, 1),
+            nn.LeakyReLU(0.1, True),
             # (ndf) x 32 x 32
-            nn.Conv2d(ndf, ndf * 2, 4, 2, 1, bias=False),
-            nn.LeakyReLU(0.2, True),
+            nn.Conv2d(ndf, ndf, 4, 2, 1),
+            nn.LeakyReLU(0.1, True),
+            # (ndf) x 32 x 32
+            nn.Conv2d(ndf, ndf * 2, 3, 1, 1),
+            nn.LeakyReLU(0.1, True),
+            # (ndf*2) x 32 x 32
+            nn.Conv2d(ndf * 2, ndf * 2, 4, 2, 1),
+            nn.LeakyReLU(0.1, True),
             # (ndf*2) x 16 x 16
-            nn.Conv2d(ndf * 2, ndf * 4, 4, 2, 1, bias=False),
-            nn.LeakyReLU(0.2, True),
+            nn.Conv2d(ndf * 2, ndf * 4, 3, 1, 1),
+            nn.LeakyReLU(0.1, True),
+            # (ndf*4) x 16 x 16
+            nn.Conv2d(ndf * 4, ndf * 4, 4, 2, 1),
+            nn.LeakyReLU(0.1, True),
             # (ndf*4) x 8 x 8
-            nn.Conv2d(ndf * 4, ndf * 8, 4, 2, 1, bias=False),
-            nn.LeakyReLU(0.2, True),
-            # (ndf*8) x 4 x 4
-            nn.Conv2d(ndf * 8, 1, 4, 1, 0, bias=False),
+            nn.Conv2d(ndf * 4, ndf * 8, 3, 1, 1),
+            nn.LeakyReLU(0.1, True),
+            # (ndf*8) x 8 x 8
+            nn.Flatten(1),
+            nn.Linear((ndf * 8) * 8 * 8, 1),
             nn.Flatten(0),
         )
 
         for module in self.main.modules():
-            if isinstance(module, nn.Conv2d) or isinstance(module, nn.BatchNorm2d):
+            if isinstance(module, (nn.Conv2d, nn.Linear)):
                 nn.utils.spectral_norm(module)
 
     def forward(self, obs):

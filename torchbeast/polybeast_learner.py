@@ -23,7 +23,7 @@ import timeit
 import traceback
 import random
 
-os.environ["OMP_NUM_THREADS"] = "1"  # Necessary for multithreading.
+os.environ["OMP_NUM_THREADS"] = "2"  # Necessary for multithreading.
 
 import nest
 import torch
@@ -235,15 +235,6 @@ def inference(flags, inference_batcher, model, lock=threading.Lock()):
             batch.set_outputs(outputs)
 
 
-def normalize(frame):
-    return (frame - 0.5) / 0.5
-
-
-def reward_func(p):
-    p = F.relu(p)
-    return (p + 1e-12).log() - (1 - p + 1e-12).log()
-
-
 EnvOutput = collections.namedtuple(
     "EnvOutput", "obs, reward, done, episode_step episode_return"
 )
@@ -283,7 +274,7 @@ def learn(
             frame = obs["canvas"][:-1]
 
             frame, new_frame = nest.map(
-                lambda t: normalize(torch.flatten(t, 0, 1)), (frame, new_frame)
+                lambda t: torch.flatten(t, 0, 1), (frame, new_frame)
             )
 
         else:
@@ -292,13 +283,13 @@ def learn(
 
                 index = done[1:].nonzero(as_tuple=False)
 
-                new_frame = normalize(new_frame[index[:, 0], index[:, 1]])
+                new_frame = new_frame[index[:, 0], index[:, 1]]
 
         lock.acquire()  # Only one thread learning at a time.
 
         if flags.use_tca:
             with torch.no_grad():
-                discriminator_reward = reward_func(D(new_frame) - D(frame)).view(
+                discriminator_reward = (D(new_frame) - D(frame)).view(
                     -1, flags.batch_size
                 )
                 reward[1:] += discriminator_reward
@@ -309,7 +300,7 @@ def learn(
         else:
             if done.any().item():
                 with torch.no_grad():
-                    discriminator_reward = reward_func(D(new_frame))
+                    discriminator_reward = D(new_frame)
                     reward[index[:, 0], index[:, 1]] += discriminator_reward
 
                 env_outputs[1] = reward
@@ -400,6 +391,7 @@ def learn(
             stats["mean_episode_return"] = None
 
         plogger.log(stats)
+        stats["n_dis"] = 0
         lock.release()
 
 
@@ -419,8 +411,11 @@ def learn_D(
     stats,
     plogger,
 ):
-    while not replay_queue.is_closed():
+    while True:
         for real, _ in dataloader:
+            if replay_queue.is_closed():
+                return
+
             real = real.to(flags.learner_device, non_blocking=True)
 
             if flags.condition:
@@ -439,15 +434,6 @@ def learn_D(
             D_x = torch.sigmoid(p_real).mean()
 
             nn.utils.clip_grad_norm_(D.parameters(), flags.grad_norm_clipping)
-
-            obs = next(replay_queue)
-
-            replay_buffer.push(normalize(obs["canvas"]).squeeze(0))
-
-            while len(replay_buffer) < flags.batch_size:
-                obs = next(replay_queue)
-                replay_buffer.push(normalize(obs["canvas"]).squeeze(0))
-                del obs
 
             fake = replay_buffer.sample(flags.batch_size).to(
                 flags.learner_device, non_blocking=True
@@ -475,6 +461,7 @@ def learn_D(
             stats["real_loss"] = real_loss.item()
             stats["D_x"] = D_x.item()
             stats["D_G_z1"] = D_G_z1.item()
+            stats["n_dis"] = stats.get("n_dis", 0) + 1
 
 
 def train(flags):
@@ -594,12 +581,9 @@ def train(flags):
     D.to(device=flags.learner_device)
 
     def weights_init(m):
-        classname = m.__class__.__name__
-        if classname.find("Conv") != -1:
+        if isinstance(m, (nn.Conv2d, nn.Linear)):
             nn.init.normal_(m.weight.data, 0.0, 0.02)
-        elif classname.find("BatchNorm") != -1:
-            nn.init.normal_(m.weight.data, 1.0, 0.02)
-            nn.init.constant_(m.bias.data, 0)
+            nn.init.normal_(m.bias.data, 0.0, 0.02)
 
     D.apply(weights_init)
 
@@ -610,9 +594,13 @@ def train(flags):
     D_eval = D_eval.to(device=flags.learner_device).eval()
 
     optimizer = optim.Adam(model.parameters(), lr=flags.policy_learning_rate)
+    """
     D_optimizer = optim.Adam(
         D.parameters(), lr=flags.discriminator_learning_rate, betas=(0.5, 0.999)
     )
+    """
+
+    D_optimizer = optim.SGD(D.parameters(), lr=flags.discriminator_learning_rate)
 
     def lr_lambda(epoch):
         return (
@@ -719,11 +707,40 @@ def train(flags):
         ),
     )
 
+    def load_replay_buffer(replay_queue, replay_buffer):
+        for obs in replay_queue:
+            replay_buffer.push(obs["canvas"].squeeze(0))
+
+    replay_buffer_loader = threading.Thread(
+        target=load_replay_buffer,
+        name="replay-buffer-loader-thread",
+        args=(replay_queue, replay_buffer,),
+    )
+    replay_buffer_loader.daemon = True
+
+    def free_learner_queue(flags, learner_queue, d_learner, learner_threads):
+        while len(replay_buffer) < flags.replay_buffer_size:
+            next(learner_queue)
+
+        d_learner.start()
+
+        for t in learner_threads:
+            t.start()
+
+    startup_thread = threading.Thread(
+        target=free_learner_queue,
+        name="startup-thread",
+        args=(flags, learner_queue, d_learner, learner_threads),
+    )
+    startup_thread.start()
+
+    replay_buffer_loader.start()
+
     actorpool_thread.start()
 
     threads = learner_threads + inference_threads
 
-    for t in threads + [d_learner]:
+    for t in inference_threads:
         t.start()
 
     def checkpoint():
@@ -748,6 +765,25 @@ def train(flags):
         return f"{x:1.5}" if isinstance(x, float) else str(x)
 
     try:
+        while True:
+            start_time = timeit.default_timer()
+            start_frame = len(replay_buffer)
+            if start_frame == flags.replay_buffer_size:
+                break
+            time.sleep(5)
+            end_frame = len(replay_buffer)
+
+            logging.info(
+                "Frame %i @ %.1f FPS. Inference batcher size: %i."
+                " Replay queue size: %i."
+                " Replay buffer size: %i",
+                end_frame,
+                (end_frame - start_frame) / (timeit.default_timer() - start_time),
+                inference_batcher.size(),
+                replay_queue.size(),
+                len(replay_buffer),
+            )
+
         last_checkpoint_time = timeit.default_timer()
         while True:
             start_time = timeit.default_timer()
@@ -787,6 +823,8 @@ def train(flags):
     replay_queue.close()
 
     actorpool_thread.join()
+
+    d_learner.join()
 
     for t in threads:
         t.join()
