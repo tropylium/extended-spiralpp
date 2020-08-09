@@ -23,7 +23,7 @@ import timeit
 import traceback
 import random
 
-os.environ["OMP_NUM_THREADS"] = "2"  # Necessary for multithreading.
+os.environ["OMP_NUM_THREADS"] = "1"  # Necessary for multithreading.
 
 import nest
 import torch
@@ -391,7 +391,7 @@ def learn(
             stats["mean_episode_return"] = None
 
         plogger.log(stats)
-        stats["n_dis"] = 0
+        stats["n_discriminator_updates"] = 0
         lock.release()
 
 
@@ -461,7 +461,9 @@ def learn_D(
             stats["real_loss"] = real_loss.item()
             stats["D_x"] = D_x.item()
             stats["D_G_z1"] = D_G_z1.item()
-            stats["n_dis"] = stats.get("n_dis", 0) + 1
+            stats["n_discriminator_updates"] = (
+                stats.get("n_discriminator_updates", 0) + 1
+            )
 
 
 def train(flags):
@@ -581,7 +583,7 @@ def train(flags):
     D.to(device=flags.learner_device)
 
     def weights_init(m):
-        if isinstance(m, (nn.Conv2d, nn.Linear)):
+        if isinstance(m, nn.Conv2d):
             nn.init.normal_(m.weight.data, 0.0, 0.02)
             nn.init.normal_(m.bias.data, 0.0, 0.02)
 
@@ -594,13 +596,9 @@ def train(flags):
     D_eval = D_eval.to(device=flags.learner_device).eval()
 
     optimizer = optim.Adam(model.parameters(), lr=flags.policy_learning_rate)
-    """
     D_optimizer = optim.Adam(
         D.parameters(), lr=flags.discriminator_learning_rate, betas=(0.5, 0.999)
     )
-    """
-
-    D_optimizer = optim.SGD(D.parameters(), lr=flags.discriminator_learning_rate)
 
     def lr_lambda(epoch):
         return (
@@ -774,10 +772,11 @@ def train(flags):
             end_frame = len(replay_buffer)
 
             logging.info(
-                "Frame %i @ %.1f FPS. Inference batcher size: %i."
+                "Frame %i of %i @ %.1f FPS. Inference batcher size: %i."
                 " Replay queue size: %i."
                 " Replay buffer size: %i",
                 end_frame,
+                flags.replay_buffer_size,
                 (end_frame - start_frame) / (timeit.default_timer() - start_time),
                 inference_batcher.size(),
                 replay_queue.size(),
