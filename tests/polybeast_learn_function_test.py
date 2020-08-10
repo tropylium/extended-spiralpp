@@ -33,7 +33,7 @@ class LearnTest(unittest.TestCase):
         batch_size = 4  # Arbitrary.
         frame_dimension = 64  # Has to match what expected by the model.
         action_shape = [1024, 1024, 2, 8, 10]
-        num_channels = 1  # Has to match with the first conv layer of the net.
+        num_channels = 2  # Has to match with the first conv layer of the net.
         grid_shape = [32, 32]  # Specific to each environment.
 
         obs_shape = [num_channels, frame_dimension, frame_dimension]
@@ -56,8 +56,10 @@ class LearnTest(unittest.TestCase):
 
         optimizer = torch.optim.SGD(self.model.parameters(), lr=self.lr)
 
-        self.D = models.Discriminator(obs_shape)
-        self.D_eval = models.Discriminator(obs_shape).eval()
+        self.D = models.ComplementDiscriminator(obs_shape, spectral_norm=False)
+        self.D_eval = models.ComplementDiscriminator(
+            obs_shape, spectral_norm=False
+        ).eval()
 
         self.initial_D_dict = copy.deepcopy(self.D.state_dict())
         self.initial_D_eval_dict = copy.deepcopy(self.D_eval.state_dict())
@@ -81,7 +83,6 @@ class LearnTest(unittest.TestCase):
         # Mock flags.
         mock_flags = mock.Mock()
         mock_flags.learner_device = torch.device("cpu")
-        mock_flags.reward_clipping = "abs_one"  # Default value from cmd.
         mock_flags.discounting = 0.99  # Default value from cmd.
         mock_flags.baseline_cost = 0.5  # Default value from cmd.
         mock_flags.entropy_cost = 0.0006  # Default value from cmd.
@@ -89,17 +90,11 @@ class LearnTest(unittest.TestCase):
         mock_flags.batch_size = batch_size
         mock_flags.grad_norm_clipping = 40
         mock_flags.use_tca = True
-        mock_flags.condition = False
+        mock_flags.condition = True
 
         # Prepare content for mock_learner_queue.
         obs = dict(
-            canvas=torch.ones(
-                unroll_length,
-                batch_size,
-                num_channels,
-                frame_dimension,
-                frame_dimension,
-            ),
+            canvas=torch.ones([unroll_length, batch_size] + obs_shape),
             prev_action=torch.ones(unroll_length, batch_size, len(action_shape)),
             action_mask=torch.ones(unroll_length, batch_size, len(action_shape)),
             noise_sample=torch.ones(unroll_length, batch_size, 10),
@@ -110,12 +105,10 @@ class LearnTest(unittest.TestCase):
         episode_return = torch.ones(unroll_length, batch_size)
 
         new_frame = dict(
-            canvas=torch.ones(
-                1, batch_size, num_channels, frame_dimension, frame_dimension,
-            ),
-            prev_action=torch.ones(1, batch_size, len(action_shape)),
-            action_mask=torch.ones(1, batch_size, len(action_shape)),
-            noise_sample=torch.ones(1, batch_size, 10),
+            canvas=torch.ones([unroll_length - 1, batch_size] + obs_shape),
+            prev_action=torch.ones(unroll_length - 1, batch_size, len(action_shape)),
+            action_mask=torch.ones(unroll_length - 1, batch_size, len(action_shape)),
+            noise_sample=torch.ones(unroll_length - 1, batch_size, 10),
         )
 
         env_outputs = (obs, rewards, done, episode_step, episode_return)
@@ -163,33 +156,25 @@ class LearnTest(unittest.TestCase):
             plogger,
         )
 
-        new_frame["canvas"] = torch.ones(
-            1, 1, num_channels, frame_dimension, frame_dimension
-        )
         # Mock replay_queue.
         mock_replay_queue = mock.MagicMock()
-        mock_replay_queue.__next__ = mock.MagicMock(return_value=new_frame)
-        mock_replay_queue.is_closed = mock.MagicMock(side_effect=[False, True])
+        mock_replay_queue.is_closed.return_value = True
 
         # Mock dataloader.
         mock_dataloader = mock.MagicMock()
         mock_dataloader.__iter__.return_value = iter(
-            [
-                (
-                    torch.ones(
-                        batch_size, num_channels, frame_dimension, frame_dimension
-                    ),
-                    None,
-                )
-            ]
+            [(torch.ones(batch_size, 1, frame_dimension, frame_dimension), None,)]
         )
-        replay_buffer = polybeast.ReplayBuffer(batch_size)
+
+        # Mock replay_buffer.
+        mock_replay_buffer = mock.MagicMock()
+        mock_replay_buffer.sample.return_value = torch.ones([batch_size] + obs_shape)
 
         self.learn_D_args = (
             mock_flags,
             mock_dataloader,
             mock_replay_queue,
-            replay_buffer,
+            mock_replay_buffer,
             self.D,
             self.D_eval,
             D_optimizer,
@@ -276,8 +261,9 @@ class LearnTest(unittest.TestCase):
             D_eval_tensor = D_eval_state_dict[key]
             # Assert that the gradient is not zero for the learner.
             # skip spectral norm weights.
-            if key[-1] in ["v", "u"]:
+            if key[-1] in ["weight_v", "weight_u"]:
                 continue
+
             self.assertGreater(torch.norm(D_tensor.grad), 0.0)
             # Assert actor has no gradient.
             # Note that even though actor model tensors have no gradient,

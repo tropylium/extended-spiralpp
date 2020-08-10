@@ -312,7 +312,7 @@ class ResBlock(nn.Module):
 
 
 class Discriminator(nn.Module):
-    def __init__(self, obs_shape):
+    def __init__(self, obs_shape, spectral_norm=True):
         super(Discriminator, self).__init__()
         c, h, w = obs_shape
 
@@ -345,9 +345,10 @@ class Discriminator(nn.Module):
             nn.Flatten(0),
         )
 
-        for module in self.main.modules():
-            if isinstance(module, (nn.Conv2d, nn.Linear)):
-                nn.utils.spectral_norm(module)
+        if spectral_norm:
+            for module in self.main.modules():
+                if isinstance(module, (nn.Conv2d, nn.Linear)):
+                    nn.utils.spectral_norm(module)
 
     def forward(self, obs):
         x = self.main(obs)
@@ -358,20 +359,20 @@ class Discriminator(nn.Module):
 
 
 class ComplementDiscriminator(Discriminator, nn.Module):
-    def __init__(self, obs_shape, power_iters):
-        super(ComplementDiscriminator, self).__init__(obs_shape, power_iters)
+    def __init__(self, obs_shape, spectral_norm=True):
+        super(ComplementDiscriminator, self).__init__(obs_shape, spectral_norm)
         self.obs_shape = obs_shape
 
-    def _mask(self):
+    def _mask(self, obs):
         c, h, w = self.obs_shape
         left = torch.ones(1, c // 2, h, w // 2)
         right = torch.zeros(1, c // 2, h, w // 2)
         mask = torch.cat([left, right], dim=-1)
         mask = torch.cat([1 - mask, mask], dim=1)
-        return mask
+        return mask * obs
 
     def forward(self, obs):
-        x = self.main(obs * self._mask)
+        x = self.main(self._mask(obs))
         if self.training:
             return x
         else:

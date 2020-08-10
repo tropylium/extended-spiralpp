@@ -413,9 +413,6 @@ def learn_D(
 ):
     while True:
         for real, _ in dataloader:
-            if replay_queue.is_closed():
-                return
-
             real = real.to(flags.learner_device, non_blocking=True)
 
             if flags.condition:
@@ -464,6 +461,9 @@ def learn_D(
             stats["n_discriminator_updates"] = (
                 stats.get("n_discriminator_updates", 0) + 1
             )
+
+            if replay_queue.is_closed():
+                return
 
 
 def train(flags):

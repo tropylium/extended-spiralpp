@@ -67,7 +67,10 @@ parser.add_argument("--dataset",
 # yapf: enable
 
 
-def serve(env_name, config, grayscale, dataset, server_address):
+def serve(env_name, config, grayscale, dataset, start, end, server_address):
+    if isinstance(dataset, str):
+        dataset = utils.create_dataset(dataset, grayscale)
+        dataset = Subset(dataset, range(start, end + 1))
     init = lambda: utils.create_env(env_name, config, grayscale, dataset)
     server = libtorchbeast.Server(init, server_address=server_address)
     server.run()
@@ -84,7 +87,9 @@ def main(flags):
 
     if flags.condition:
         dataset = utils.create_dataset(flags.dataset, grayscale)
-        per_actor = len(dataset) // flags.actors
+        per_actor = len(dataset) // flags.num_actors
+    else:
+        dataset = start = end = None
 
     is_color = flags.use_color or flags.env_type == "fluid"
     if is_color is False:
@@ -98,13 +103,17 @@ def main(flags):
             start = per_actor * i
             end = min(start + per_actor, len(dataset))
 
-            dataset = Subset(dataset, range(start, end + 1))
-        else:
-            dataset = None
-
         p = mp.Process(
             target=serve,
-            args=(env_name, config, grayscale, dataset, f"{flags.pipes_basename}.{i}"),
+            args=(
+                env_name,
+                config,
+                grayscale,
+                dataset,
+                start,
+                end,
+                f"{flags.pipes_basename}.{i}",
+            ),
             daemon=True,
         )
         p.start()
