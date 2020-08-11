@@ -242,6 +242,41 @@ AgentOutput = collections.namedtuple("AgentOutput", "action policy_logits baseli
 Batch = collections.namedtuple("Batch", "env agent")
 
 
+def tca_reward_function(flags, obs, new_frame, D):
+    frame = obs["canvas"][:-1]
+    frame, new_frame = nest.map(lambda t: torch.flatten(t, 0, 1), (frame, new_frame))
+
+    with torch.no_grad():
+        reward = torch.zeros(
+            flags.unroll_length + 1, flags.batch_size, device=flags.learner_device
+        )
+
+        reward[1:] += (D(new_frame) - D(frame)).view(-1, flags.batch_size)
+
+    return reward
+
+
+def reward_function(flags, done, new_frame, D):
+    index = done[1:].nonzero(as_tuple=False)
+    new_frame = new_frame[index[:, 0], index[:, 1]]
+
+    with torch.no_grad():
+        reward = torch.zeros(
+            flags.unroll_length + 1, flags.batch_size, device=flags.learner_device
+        )
+
+        reward[index[:, 0], index[:, 1]] += D(new_frame)
+
+    return reward
+
+
+def edit_tuple(old_tuple, index, data):
+    list_tuple = list(old_tuple)
+    list_tuple[index] = data
+    new_tuple = tuple(list_tuple)
+    return new_tuple
+
+
 def learn(
     flags,
     learner_queue,
@@ -255,9 +290,8 @@ def learn(
     lock=threading.Lock(),
 ):
     for tensors in learner_queue:
-        tensors = list(tensors)
-        tensors[1] = tensors[1]["canvas"]
-        tensors = tuple(tensors)
+        new_obs = tensors[1]
+        tensors = edit_tuple(tensors, 1, new_obs["canvas"])
 
         tensors = nest.map(
             lambda t: t.to(flags.learner_device, non_blocking=True), tensors
@@ -268,43 +302,21 @@ def learn(
         env_outputs, actor_outputs = batch
         obs, reward, done, step, _ = env_outputs
 
-        if flags.use_tca:
-            env_outputs = list(env_outputs)
-
-            frame = obs["canvas"][:-1]
-
-            frame, new_frame = nest.map(
-                lambda t: torch.flatten(t, 0, 1), (frame, new_frame)
-            )
-
-        else:
-            if done.any().item():
-                env_outputs = list(env_outputs)
-
-                index = done[1:].nonzero(as_tuple=False)
-
-                new_frame = new_frame[index[:, 0], index[:, 1]]
-
         lock.acquire()  # Only one thread learning at a time.
 
         if flags.use_tca:
-            with torch.no_grad():
-                discriminator_reward = (D(new_frame) - D(frame)).view(
-                    -1, flags.batch_size
-                )
-                reward[1:] += discriminator_reward
+            discriminator_reward = tca_reward_function(flags, obs, new_frame, D)
 
-            env_outputs[1] = reward
-            batch = (tuple(env_outputs), actor_outputs)
-
+            reward = env_outputs[1]
+            env_outputs = edit_tuple(env_outputs, 1, reward + discriminator_reward)
+            batch = edit_tuple(batch, 0, env_outputs)
         else:
             if done.any().item():
-                with torch.no_grad():
-                    discriminator_reward = D(new_frame)
-                    reward[index[:, 0], index[:, 1]] += discriminator_reward
+                discriminator_reward = reward_function(flags, done, new_frame, D)
 
-                env_outputs[1] = reward
-                batch = (tuple(env_outputs), actor_outputs)
+                reward = env_outputs[1]
+                env_outputs = edit_tuple(env_outputs, 1, reward + discriminator_reward)
+                batch = edit_tuple(batch, 0, env_outputs)
 
         optimizer.zero_grad()
 
