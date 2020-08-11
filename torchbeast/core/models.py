@@ -320,25 +320,25 @@ class Discriminator(nn.Module):
         self.main = nn.Sequential(
             # (c) x 64 x 64
             nn.Conv2d(c, ndf, 3, 1, 1),
-            nn.LeakyReLU(0.1, True),
+            nn.LeakyReLU(0.1),
             # (ndf) x 32 x 32
             nn.Conv2d(ndf, ndf, 4, 2, 1),
-            nn.LeakyReLU(0.1, True),
+            nn.LeakyReLU(0.1),
             # (ndf) x 32 x 32
             nn.Conv2d(ndf, ndf * 2, 3, 1, 1),
-            nn.LeakyReLU(0.1, True),
+            nn.LeakyReLU(0.1),
             # (ndf*2) x 32 x 32
             nn.Conv2d(ndf * 2, ndf * 2, 4, 2, 1),
-            nn.LeakyReLU(0.1, True),
+            nn.LeakyReLU(0.1),
             # (ndf*2) x 16 x 16
             nn.Conv2d(ndf * 2, ndf * 4, 3, 1, 1),
-            nn.LeakyReLU(0.1, True),
+            nn.LeakyReLU(0.1),
             # (ndf*4) x 16 x 16
             nn.Conv2d(ndf * 4, ndf * 4, 4, 2, 1),
-            nn.LeakyReLU(0.1, True),
+            nn.LeakyReLU(0.1),
             # (ndf*4) x 8 x 8
             nn.Conv2d(ndf * 4, ndf * 8, 3, 1, 1),
-            nn.LeakyReLU(0.1, True),
+            nn.LeakyReLU(0.1),
             # (ndf*8) x 8 x 8
             nn.Flatten(1),
             nn.Linear((ndf * 8) * 8 * 8, 1),
