@@ -29,7 +29,7 @@ def _state_dict_to_numpy(state_dict):
 
 class LearnTest(unittest.TestCase):
     def setUp(self):
-        unroll_length = 2  # Inference called for every step.
+        unroll_length = 3  # Inference called for every step.
         batch_size = 4  # Arbitrary.
         frame_dimension = 64  # Has to match what expected by the model.
         action_shape = [1024, 1024, 2, 8, 10]
@@ -86,7 +86,7 @@ class LearnTest(unittest.TestCase):
         mock_flags.discounting = 0.99  # Default value from cmd.
         mock_flags.baseline_cost = 0.5  # Default value from cmd.
         mock_flags.entropy_cost = 0.0006  # Default value from cmd.
-        mock_flags.unroll_length = unroll_length
+        mock_flags.unroll_length = unroll_length - 1
         mock_flags.batch_size = batch_size
         mock_flags.grad_norm_clipping = 40
         mock_flags.use_tca = True
