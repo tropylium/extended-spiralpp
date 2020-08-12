@@ -215,6 +215,18 @@ class ReplayBuffer:
     def __len__(self):
         return len(self.buffer)
 
+    def checkpoint(self):
+        return dict(
+            buffer=torch.cat(self.buffer),
+            position=self.position,
+            capacity=self.capacity,
+        )
+
+    def load_checkpoint(self, checkpoint):
+        self.buffer = checkpoint["buffer"].split(1)
+        self.position = checkpoint["position"]
+        self.capacity = checkpoint["capacity"]
+
 
 def inference(flags, inference_batcher, model, lock=threading.Lock()):
     with torch.no_grad():
@@ -386,7 +398,9 @@ def learn(
         stats["step"] = stats.get("step", 0) + flags.unroll_length * flags.batch_size
         stats["episode_returns"] = tuple(episode_returns.cpu().numpy())
         stats["mean_episode_return"] = torch.mean(episode_returns).item()
-        stats["mean_discriminator_returns"] = torch.mean(discriminator_reward).item()
+        stats["mean_discriminator_returns"] = torch.mean(
+            torch.sum(discriminator_reward, dim=0)
+        ).item()
         stats["total_loss"] = total_loss.item()
         stats["pg_loss"] = pg_loss.item()
         stats["baseline_loss"] = baseline_loss.item()
@@ -666,6 +680,7 @@ def train(flags):
         scheduler.load_state_dict(checkpoint_states["D_scheduler_state_dict"])
         D_scheduler.load_state_dict(checkpoint_states["scheduler_state_dict"])
         stats = checkpoint_states["stats"]
+        replay_buffer.load_checkpoint(checkpoint_states["replay_buffer"])
         logging.info(f"Resuming preempted job, current stats:\n{stats}")
 
     # Initialize actor model like learner model.
@@ -767,6 +782,7 @@ def train(flags):
                 "D_scheduler_state_dict": D_scheduler.state_dict(),
                 "stats": stats,
                 "flags": vars(flags),
+                "replay_buffer": replay_buffer.checkpoint(),
             },
             checkpointpath,
         )
@@ -779,6 +795,7 @@ def train(flags):
             start_time = timeit.default_timer()
             start_frame = len(replay_buffer)
             if start_frame == flags.replay_buffer_size:
+                logging.info("Replay buffer loaded with %i frames.", len(replay_buffer))
                 break
             time.sleep(5)
             end_frame = len(replay_buffer)
