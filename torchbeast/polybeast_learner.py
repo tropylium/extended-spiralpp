@@ -153,24 +153,19 @@ def compute_baseline_loss(advantages):
     return 0.5 * torch.sum(advantages ** 2)
 
 
-def compute_entropy_loss(logits):
+def compute_entropy_loss(logit):
     """Return the entropy loss, i.e., the negative entropy of the policy."""
-    entropy = 0
-    for logit in logits:
-        policy = F.softmax(logit, dim=-1)
-        log_policy = F.log_softmax(logit, dim=-1)
-        entropy += torch.sum(policy * log_policy)
-    return entropy
+    policy = F.softmax(logit, dim=-1)
+    log_policy = F.log_softmax(logit, dim=-1)
+    return torch.sum(policy * log_policy)
 
 
-def compute_policy_gradient_loss(logits, actions, advantages):
-    cross_entropy = 0
-    for i, logit in enumerate(logits):
-        cross_entropy += F.nll_loss(
-            F.log_softmax(torch.flatten(logit, 0, 1), dim=-1),
-            target=torch.flatten(actions[..., i].long(), 0, 1),
-            reduction="none",
-        )
+def compute_policy_gradient_loss(logit, action, advantages):
+    cross_entropy = F.nll_loss(
+        F.log_softmax(torch.flatten(logit, 0, 1), dim=-1),
+        target=torch.flatten(action.long(), 0, 1),
+        reduction="none",
+    )
     cross_entropy = cross_entropy.view_as(advantages)
     return torch.sum(cross_entropy * advantages.detach())
 
@@ -223,7 +218,7 @@ class ReplayBuffer:
         )
 
     def load_checkpoint(self, checkpoint):
-        self.buffer = checkpoint["buffer"].split(1)
+        self.buffer = list(checkpoint["buffer"].split(1))
         self.position = checkpoint["position"]
         self.capacity = checkpoint["capacity"]
 
@@ -370,19 +365,26 @@ def learn(
 
         vtrace_returns = vtrace.VTraceFromLogitsReturns._make(vtrace_returns)
 
-        pg_loss = compute_policy_gradient_loss(
-            learner_outputs.policy_logits,
-            actor_outputs.action,
-            vtrace_returns.pg_advantages,
-        )
-        baseline_loss = flags.baseline_cost * compute_baseline_loss(
-            vtrace_returns.vs - learner_outputs.baseline
-        )
-        entropy_loss = flags.entropy_cost * compute_entropy_loss(
-            learner_outputs.policy_logits
-        )
+        total_loss = 0
+        total_pg_loss = 0
+        total_baseline_loss = 0
+        total_entropy_loss = 0
+        for policy_logit, action in zip(
+            learner_outputs.policy_logits, actor_outputs.action.split(1, dim=-1)
+        ):
+            pg_loss = compute_policy_gradient_loss(
+                policy_logit, action.squeeze(dim=-1), vtrace_returns.pg_advantages,
+            )
+            baseline_loss = flags.baseline_cost * compute_baseline_loss(
+                vtrace_returns.vs - learner_outputs.baseline
+            )
+            entropy_loss = flags.entropy_cost * compute_entropy_loss(policy_logit)
 
-        total_loss = pg_loss + baseline_loss + entropy_loss
+            total_loss += pg_loss + baseline_loss + entropy_loss
+
+            total_pg_loss += pg_loss
+            total_baseline_loss += baseline_loss
+            total_entropy_loss += entropy_loss
 
         total_loss.backward()
 
@@ -402,9 +404,9 @@ def learn(
             torch.sum(discriminator_reward, dim=0)
         ).item()
         stats["total_loss"] = total_loss.item()
-        stats["pg_loss"] = pg_loss.item()
-        stats["baseline_loss"] = baseline_loss.item()
-        stats["entropy_loss"] = entropy_loss.item()
+        stats["pg_loss"] = total_pg_loss.item()
+        stats["baseline_loss"] = total_baseline_loss.item()
+        stats["entropy_loss"] = total_entropy_loss.item()
         stats["learner_queue_size"] = learner_queue.size()
 
         if flags.condition and new_frame.size() != 0:
