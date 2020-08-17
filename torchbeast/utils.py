@@ -123,6 +123,10 @@ def create_env(
 ):
     env = env_wrapper.make_raw(env_name, config)
 
+    env = env_wrapper.TensorActions(env, env.order)
+    env = env_wrapper.SampleNoise(env, noise_dim=10, dict_space_key="noise_sample")
+    env = env_wrapper.SavePrevAction(env, dict_space_key="prev_action")
+
     if frame_width != config["canvas_width"]:
         env = env_wrapper.WarpFrame(
             env,
@@ -131,8 +135,7 @@ def create_env(
             grayscale=grayscale,
             dict_space_key="canvas",
         )
-
-    env = env_wrapper.Base(env)
+    env = env_wrapper.Normalize(env, dict_space_key="canvas")
 
     if isinstance(dataset, Dataset):
         env = env_wrapper.ConcatTarget(env, dataset)

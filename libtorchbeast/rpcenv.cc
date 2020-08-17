@@ -127,11 +127,6 @@ class EnvServer {
 
 	    set_observation(resetfunc());
 
-            // Reset episode_* for the _next_ step.
-	    reward = 0.0;
-            episode_step = 0;
-            episode_return = 0.0;
-
             step_pb.Clear();
             step_pb.set_reward(reward);
             step_pb.set_done(done);
@@ -144,6 +139,10 @@ class EnvServer {
         }
 
 	if (done) {
+          // Reset episode_* for the _next_ step.
+          episode_step = 0;
+          episode_return = 0.0;
+
           fill_nest_pb(step_pb.mutable_observation(), std::move(observation),
                        fill_ndarray_pb);
 	}

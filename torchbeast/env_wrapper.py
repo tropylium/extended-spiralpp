@@ -94,61 +94,92 @@ class WarpFrame(gym.ObservationWrapper):
         return obs
 
 
-class Base(gym.Wrapper):
-    def __init__(self, env, noise_dim=10):
+class Normalize(gym.ObservationWrapper):
+    def __init__(self, env, dict_space_key=None):
+        super().__init__(env)
+        self._key = dict_space_key
+
+        if self._key is None:
+            original_space = self.observation_space
+        else:
+            original_space = self.observation_space.spaces[self._key]
+
+        h, w, c = original_space.shape
+        new_space = spaces.Box(low=-1.0, high=1.0, shape=(c, h, w), dtype=np.float32)
+
+        self.observation_space.spaces[dict_space_key] = new_space
+        assert len(original_space.shape) in [1, 3]
+
+    def observation(self, obs):
+        if self._key is None:
+            frame = obs
+        else:
+            frame = obs[self._key]
+
+        nchw = np.transpose(frame, axes=(2, 0, 1)) / 255.0
+        normalized = (nchw - 0.5) / 0.5
+
+        if self._key is None:
+            obs = normalized
+        else:
+            obs = obs.copy()
+            obs[self._key] = normalized
+        return obs
+
+
+class SampleNoise(gym.ObservationWrapper):
+    def __init__(
+        self, env, dict_space_key, noise_dim=10,
+    ):
         super().__init__(env)
         self.dim = noise_dim
-        self.action_space = spaces.MultiDiscrete(self.action_space.nvec)
-        self._initial_action = np.zeros(self.action_space.nvec.shape, dtype=np.int64)
+        self._key = dict_space_key
 
         new_space = env.observation_space.spaces
-        h, w, c = new_space["canvas"].shape
-
-        new_space["canvas"] = spaces.Box(
-            low=-1.0, high=1.0, shape=(c, h, w), dtype=np.float32
-        )
-        new_space.update(
-            {
-                "noise_sample": spaces.Box(
-                    low=-1.0, high=1.0, shape=(noise_dim,), dtype=np.float32
-                ),
-                "prev_action": self.action_space,
-            }
+        new_space["noise_sample"] = spaces.Box(
+            low=-1.0, high=1.0, shape=(noise_dim,), dtype=np.float32
         )
         self.observation_space = spaces.Dict(new_space)
 
-    def _convert_to_dict(self, action):
-        return dict(zip(self.env.order, action.squeeze().tolist()))
+    def observation(self, obs):
+        obs[self._key] = np.random.normal(size=(self.dim,)).astype(np.float32)
+        return obs
 
-    def _preprocess(self, canvas):
-        nchw = np.transpose(canvas, axes=(2, 0, 1)) / 255.0
-        normalized = (nchw - 0.5) / 0.5
-        return normalized
 
-    def _sample_noise(self, dims):
-        return np.random.normal(size=(dims,)).astype(np.float32)
+class SavePrevAction(gym.Wrapper):
+    def __init__(self, env, dict_space_key):
+        super().__init__(env)
 
-    def step(self, action):
-        obs, reward, done, info = self.env.step(self._convert_to_dict(action))
-        obs = obs.copy()
-        obs["canvas"] = self._preprocess(obs["canvas"])
-        obs["noise_sample"] = self.noise
-        obs["prev_action"] = self.prev_action
-        self.prev_action = action
-        return obs, reward, done, info
+        self._key = dict_space_key
+
+        if isinstance(self.action_space, spaces.MultiDiscrete):
+            self.action_space = spaces.MultiDiscrete(self.action_space.nvec)
+            self._initial_action = np.zeros(
+                self.action_space.nvec.shape, dtype=np.int64
+            )
 
     def reset(self):
         obs = self.env.reset()
-        obs = obs.copy()
-        obs["canvas"] = self._preprocess(obs["canvas"])
-
-        self.noise = self._sample_noise(self.dim)
-        obs["noise_sample"] = self.noise
-
+        obs[self._key] = self._initial_action
         self.prev_action = self._initial_action
-        obs["prev_action"] = self.prev_action
 
         return obs
+
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+        obs[self._key] = self.prev_action
+        self.prev_action = action
+
+        return obs, reward, done, info
+
+
+class TensorActions(gym.ActionWrapper):
+    def __init__(self, env, order):
+        super().__init__(env)
+        self.order = order
+
+    def action(self, action):
+        return dict(zip(self.order, action.squeeze().tolist()))
 
 
 def make_raw(env_id, config):
