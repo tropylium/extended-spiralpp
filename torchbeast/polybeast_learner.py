@@ -397,10 +397,13 @@ def learn(
 
         stats["step"] = stats.get("step", 0) + flags.unroll_length * flags.batch_size
         stats["episode_returns"] = tuple(episode_returns.cpu().numpy())
-        stats["mean_episode_return"] = torch.mean(episode_returns).item()
-        stats["mean_discriminator_returns"] = torch.mean(
+        stats["mean_environment_return"] = torch.mean(episode_returns).item()
+        stats["mean_discriminator_return"] = torch.mean(
             torch.sum(discriminator_reward, dim=0)
         ).item()
+        stats["mean_episode_return"] = (
+            stats["mean_environment_return"] + stats["mean_discriminator_return"]
+        )
         stats["total_loss"] = total_loss.item()
         stats["pg_loss"] = pg_loss.item()
         stats["baseline_loss"] = baseline_loss.item()
@@ -411,10 +414,6 @@ def learn(
             stats["l2_loss"] = F.mse_loss(
                 *new_frame.split(split_size=new_frame.shape[1] // 2, dim=1)
             ).item()
-
-        if not len(episode_returns):
-            # Hide the mean-of-empty-tuple NaN as it scares people.
-            stats["mean_episode_return"] = None
 
         plogger.log(stats)
         stats["n_discriminator_updates"] = 0
