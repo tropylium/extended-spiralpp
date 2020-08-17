@@ -314,40 +314,34 @@ class ResBlock(nn.Module):
 class Discriminator(nn.Module):
     def __init__(self, obs_shape, spectral_norm=True):
         super(Discriminator, self).__init__()
-        c, h, w = obs_shape
+        nc, h, w = obs_shape
 
         ndf = 64
         self.main = nn.Sequential(
             # (c) x 64 x 64
-            nn.Conv2d(c, ndf, 3, 1, 1),
-            nn.LeakyReLU(0.1),
-            # (ndf) x 32 x 32
-            nn.Conv2d(ndf, ndf, 4, 2, 1),
-            nn.LeakyReLU(0.1),
-            # (ndf) x 32 x 32
-            nn.Conv2d(ndf, ndf * 2, 3, 1, 1),
-            nn.LeakyReLU(0.1),
-            # (ndf*2) x 32 x 32
-            nn.Conv2d(ndf * 2, ndf * 2, 4, 2, 1),
-            nn.LeakyReLU(0.1),
-            # (ndf*2) x 16 x 16
-            nn.Conv2d(ndf * 2, ndf * 4, 3, 1, 1),
-            nn.LeakyReLU(0.1),
-            # (ndf*4) x 16 x 16
-            nn.Conv2d(ndf * 4, ndf * 4, 4, 2, 1),
-            nn.LeakyReLU(0.1),
-            # (ndf*4) x 8 x 8
-            nn.Conv2d(ndf * 4, ndf * 8, 3, 1, 1),
-            nn.LeakyReLU(0.1),
-            # (ndf*8) x 8 x 8
-            nn.Flatten(1),
-            nn.Linear((ndf * 8) * 8 * 8, 1),
+            nn.Conv2d(nc, ndf, 4, 2, 1, bias=False),
+            nn.Dropout2d(0.3),
+            nn.LeakyReLU(0.2, inplace=True),
+            # state size. (ndf) x 32 x 32
+            nn.Conv2d(ndf, ndf * 2, 4, 2, 1, bias=False),
+            nn.Dropout2d(0.3),
+            nn.LeakyReLU(0.2, inplace=True),
+            # state size. (ndf*2) x 16 x 16
+            nn.Conv2d(ndf * 2, ndf * 4, 4, 2, 1, bias=False),
+            nn.Dropout2d(0.3),
+            nn.LeakyReLU(0.2, inplace=True),
+            # state size. (ndf*4) x 8 x 8
+            nn.Conv2d(ndf * 4, ndf * 8, 4, 2, 1, bias=False),
+            nn.Dropout2d(0.3),
+            nn.LeakyReLU(0.2, inplace=True),
+            # state size. (ndf*8) x 4 x 4
+            nn.Conv2d(ndf * 8, 1, 4, 1, 0, bias=False),
             nn.Flatten(0),
         )
 
         if spectral_norm:
             for module in self.main.modules():
-                if isinstance(module, (nn.Conv2d, nn.Linear)):
+                if isinstance(module, nn.Conv2d):
                     nn.utils.spectral_norm(module)
 
     def forward(self, obs):
