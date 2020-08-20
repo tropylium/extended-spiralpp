@@ -94,7 +94,7 @@ class WarpFrame(gym.ObservationWrapper):
         return obs
 
 
-class Normalize(gym.ObservationWrapper):
+class FloatNCHW(gym.ObservationWrapper):
     def __init__(self, env, dict_space_key=None):
         super().__init__(env)
         self._key = dict_space_key
@@ -105,7 +105,7 @@ class Normalize(gym.ObservationWrapper):
             original_space = self.observation_space.spaces[self._key]
 
         h, w, c = original_space.shape
-        new_space = spaces.Box(low=-1.0, high=1.0, shape=(c, h, w), dtype=np.float32)
+        new_space = spaces.Box(low=0.0, high=1.0, shape=(c, h, w), dtype=np.float32)
 
         self.observation_space.spaces[dict_space_key] = new_space
         assert len(original_space.shape) in [1, 3]
@@ -117,13 +117,12 @@ class Normalize(gym.ObservationWrapper):
             frame = obs[self._key]
 
         nchw = np.transpose(frame, axes=(2, 0, 1)) / 255.0
-        normalized = (nchw - 0.5) / 0.5
 
         if self._key is None:
-            obs = normalized
+            obs = nchw
         else:
             obs = obs.copy()
-            obs[self._key] = normalized
+            obs[self._key] = nchw
         return obs
 
 
@@ -137,7 +136,7 @@ class SampleNoise(gym.ObservationWrapper):
 
         new_space = env.observation_space.spaces
         new_space["noise_sample"] = spaces.Box(
-            low=-1.0, high=1.0, shape=(noise_dim,), dtype=np.float32
+            low=0.0, high=1.0, shape=(noise_dim,), dtype=np.float32
         )
         self.observation_space = spaces.Dict(new_space)
 

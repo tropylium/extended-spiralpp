@@ -59,31 +59,23 @@ def parse_flags(flags):
     return env_name, config
 
 
-def create_dataset(name, grayscale, normalize=True):
+def create_dataset(name, grayscale):
     tsfm = []
     if grayscale:
         tsfm.append(transforms.Grayscale())
     tsfm.extend([transforms.Resize((frame_width, frame_width)), transforms.ToTensor()])
+    tsfm = transforms.Compose(tsfm)
 
     with FileLock("./dataset.lock"):
         if name == "mnist":
-            if normalize:
-                tsfm.append(transforms.Normalize((0.5,), (0.5,)))
-            tsfm = transforms.Compose(tsfm)
             dataset = MNIST(root="./", train=True, transform=tsfm, download=True)
 
         elif name == "omniglot":
-            if normalize:
-                tsfm.append(transforms.Normalize((0.5,), (0.5,)))
-            tsfm = transforms.Compose(tsfm)
             dataset = Omniglot(
                 root="./", background=True, transform=tsfm, download=True
             )
 
         elif name == "celeba":
-            if normalize:
-                tsfm.append(transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
-            tsfm = transforms.Compose(tsfm)
             dataset = CelebA(
                 root="./",
                 split="train",
@@ -93,9 +85,6 @@ def create_dataset(name, grayscale, normalize=True):
             )
 
         elif name == "celeba-hq":
-            if normalize:
-                tsfm.append(transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
-            tsfm = transforms.Compose(tsfm)
             dataset = CelebAHQ(root="./", split="train", transform=tsfm, download=True)
 
         else:
@@ -134,7 +123,7 @@ def create_env(
             grayscale=grayscale,
             dict_space_key="canvas",
         )
-    env = env_wrapper.Normalize(env, dict_space_key="canvas")
+    env = env_wrapper.FloatNCHW(env, dict_space_key="canvas")
 
     if isinstance(dataset, Dataset):
         env = env_wrapper.ConcatTarget(env, dataset)
