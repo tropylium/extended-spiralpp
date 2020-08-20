@@ -173,15 +173,6 @@ class SavePrevAction(gym.Wrapper):
         return obs, reward, done, info
 
 
-class TensorActions(gym.ActionWrapper):
-    def __init__(self, env, order):
-        super().__init__(env)
-        self.order = order
-
-    def action(self, action):
-        return dict(zip(self.order, action.squeeze().tolist()))
-
-
 def make_raw(env_id, config):
     env = gym.make("spiral:" + env_id)
     if len(config) > 0:

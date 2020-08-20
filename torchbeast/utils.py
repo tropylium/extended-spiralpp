@@ -123,7 +123,6 @@ def create_env(
 ):
     env = env_wrapper.make_raw(env_name, config)
 
-    env = env_wrapper.TensorActions(env, env.order)
     env = env_wrapper.SampleNoise(env, noise_dim=10, dict_space_key="noise_sample")
     env = env_wrapper.SavePrevAction(env, dict_space_key="prev_action")
 
