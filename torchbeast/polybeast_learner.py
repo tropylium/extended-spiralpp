@@ -471,31 +471,27 @@ def learn_D(
 
             loss = real_loss + fake_loss
 
-            if flags.gp_weight == 0.0:
-                grad_penalty = 0.0
-            else:
+            if flags.gp_weight > 0.0:
                 alpha = torch.rand(
                     (flags.batch_size, 1, 1, 1), device=flags.learner_device
                 )
                 diff = real - fake
                 interpolate = fake + alpha * diff
+                interpolate.requires_grad = True
 
                 p_interpolate = D(interpolate)
 
-                # Creates gradients
-                grad_params = torch.autograd.grad(
-                    torch.sum(p_interpolate), D.parameters(), create_graph=True
-                )
+                grad_outputs = torch.ones_like(p_interpolate)
 
-                # Computes the penalty term and adds it to the loss
-                grad_norm = 0
-                for grad in grad_params:
-                    grad_norm += grad.pow(2).sum()
-                grad_norm = grad_norm.sqrt()
+                gradient = torch.autograd.grad(
+                    p_interpolate, interpolate, grad_outputs, create_graph=True
+                )[0]
 
-                grad_penalty = flags.gp_weight * grad_norm.sub(1).pow(2)
+                grad_norm = gradient.view(flags.batch_size, -1).norm(2, dim=1)
+                grad_penalty = flags.gp_weight * grad_norm.sub(1).pow(2).mean()
 
-            loss = loss + grad_penalty
+                loss = loss + grad_penalty
+
             loss.backward()
 
             optimizer.step()
@@ -511,7 +507,7 @@ def learn_D(
             stats["n_discriminator_updates"] = (
                 stats.get("n_discriminator_updates", 0) + 1
             )
-            stats["grad_norm"] = grad_norm.item()
+            stats["grad_norm"] = grad_norm.mean().item()
             stats["grad_penalty"] = grad_penalty.item()
 
             if replay_queue.is_closed():
