@@ -27,6 +27,7 @@ class InferenceTest(unittest.TestCase):
         self.unroll_length = 1  # Inference called for every step.
         self.batch_size = 4  # Arbitrary.
         self.frame_dimension = 64  # Has to match what expected by the model.
+        self.order = ["control", "end", "flag", "size"]
         self.action_shape = [1024, 1024, 2, 8]
         self.num_channels = 1  # Has to match with the first conv layer of the net.
         self.grid_shape = [32, 32]  # Specific to each environment.
@@ -67,6 +68,7 @@ class InferenceTest(unittest.TestCase):
     def _test_inference(self, use_color, device):
         model = models.Net(
             obs_shape=self.obs_shape,
+            order=self.order,
             action_shape=self.action_shape,
             grid_shape=self.grid_shape,
         )

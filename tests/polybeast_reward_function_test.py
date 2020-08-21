@@ -27,10 +27,11 @@ def _state_dict_to_numpy(state_dict):
 
 class RewardTest(unittest.TestCase):
     def setUp(self):
-        unroll_length = 3  # Inference called for every step.
+        unroll_length = 2  # Inference called for every step.
         batch_size = 4  # Arbitrary.
         frame_dimension = 64  # Has to match what expected by the model.
         num_channels = 1  # Has to match with the first conv layer of the net.
+        gp_weight = 1.0
 
         obs_shape = [num_channels, frame_dimension, frame_dimension]
 
@@ -42,12 +43,13 @@ class RewardTest(unittest.TestCase):
         # Mock flags.
         mock_flags = mock.Mock()
         mock_flags.learner_device = torch.device("cpu")
-        mock_flags.unroll_length = unroll_length - 1
+        mock_flags.unroll_length = unroll_length
         mock_flags.batch_size = batch_size
+        mock_flags.gp_weight = gp_weight
         self.flags = mock_flags
 
         # Prepare content for mock_learner_queue.
-        self.obs = dict(canvas=torch.ones([unroll_length, batch_size] + obs_shape))
+        self.obs = dict(canvas=torch.ones([unroll_length + 1, batch_size] + obs_shape))
         self.done = torch.tensor(
             [
                 [True, False, False, True],
@@ -56,12 +58,13 @@ class RewardTest(unittest.TestCase):
             ]
         )
 
-        self.new_frame = torch.ones([unroll_length - 1, batch_size] + obs_shape)
+        self.new_frame = torch.ones([unroll_length, batch_size] + obs_shape)
 
         self.reward = torch.randn(len(self.done[1:].nonzero(as_tuple=False)))
 
     def test_tca_reward_shape(self):
         """Check that the tca reward shape is correct."""
+        self.flags.use_tca = True
         reward = polybeast.tca_reward_function(
             self.flags, self.obs, self.new_frame, self.D
         )
@@ -72,8 +75,9 @@ class RewardTest(unittest.TestCase):
 
     def test_reward_shape(self):
         """Check that the reward shape is correct."""
+        self.flags.use_tca = False
         reward = polybeast.reward_function(
-            self.flags, self.done, self.new_frame, self.D
+            self.flags, self.done, self.new_frame, self.D.train()
         )
 
         self.assertEqual(
@@ -83,6 +87,7 @@ class RewardTest(unittest.TestCase):
 
     def test_non_zero_tca_reward(self):
         """Check that the tca reward is not zero."""
+        self.flags.use_tca = True
         reward = polybeast.tca_reward_function(
             self.flags, self.obs, self.new_frame, self.D.train()
         )
@@ -91,14 +96,16 @@ class RewardTest(unittest.TestCase):
 
     def test_non_zero_reward(self):
         """Check that the reward is not zero."""
+        self.flags.use_tca = False
         reward = polybeast.reward_function(
-            self.flags, self.done, self.new_frame, self.D
+            self.flags, self.done, self.new_frame, self.D.train()
         )
 
         self.assertNotEqual(reward.sum().item(), 0.0)
 
     def test_tca_reward_order(self):
         """Check that the tca reward order is correct."""
+        self.flags.use_tca = True
         reward = polybeast.tca_reward_function(
             self.flags, self.obs, self.new_frame, self.D
         )
@@ -116,6 +123,7 @@ class RewardTest(unittest.TestCase):
         def mock_D(new_frame):
             return self.reward
 
+        self.flags.use_tca = False
         reward = polybeast.reward_function(
             self.flags, self.done, self.new_frame, mock_D
         )

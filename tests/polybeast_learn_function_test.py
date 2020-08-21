@@ -32,6 +32,7 @@ class LearnTest(unittest.TestCase):
         unroll_length = 3  # Inference called for every step.
         batch_size = 4  # Arbitrary.
         frame_dimension = 64  # Has to match what expected by the model.
+        order = ["control", "end", "flag", "size", "pressure"]
         action_shape = [1024, 1024, 2, 8, 10]
         num_channels = 2  # Has to match with the first conv layer of the net.
         grid_shape = [32, 32]  # Specific to each environment.
@@ -46,10 +47,13 @@ class LearnTest(unittest.TestCase):
         torch.manual_seed(0)
 
         self.model = models.Net(
-            obs_shape=obs_shape, action_shape=action_shape, grid_shape=grid_shape,
+            obs_shape=obs_shape,
+            order=order,
+            action_shape=action_shape,
+            grid_shape=grid_shape,
         )
         self.actor_model = models.Net(
-            obs_shape=obs_shape, action_shape=action_shape, grid_shape=grid_shape,
+            obs_shape=obs_shape, order=order, action_shape=action_shape, grid_shape=grid_shape,
         )
         self.initial_model_dict = copy.deepcopy(self.model.state_dict())
         self.initial_actor_model_dict = copy.deepcopy(self.actor_model.state_dict())

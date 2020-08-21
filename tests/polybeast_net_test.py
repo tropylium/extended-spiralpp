@@ -24,6 +24,7 @@ class NetTest(unittest.TestCase):
         self.unroll_length = 4  # Arbitrary.
         self.batch_size = 4  # Arbitrary.
         self.frame_dimension = 64  # Has to match what expected by the model.
+        self.order = ["control", "end", "flag", "size"]
         self.action_shape = [1024, 1024, 2, 8]  # First 3 dimensions are fixed.
         self.num_channels = 1  # Has to match with the first conv layer of the net.
         self.grid_shape = [32, 32]  # Specific to each environment.
@@ -53,6 +54,7 @@ class NetTest(unittest.TestCase):
     def test_forward_return_signature(self):
         model = models.Net(
             obs_shape=self.obs_shape,
+            order=self.order,
             action_shape=self.action_shape,
             grid_shape=self.grid_shape,
         )
@@ -75,6 +77,7 @@ class NetTest(unittest.TestCase):
     def test_initial_state(self):
         model = models.Net(
             obs_shape=self.obs_shape,
+            order=self.order,
             action_shape=self.action_shape,
             grid_shape=self.grid_shape,
         )
