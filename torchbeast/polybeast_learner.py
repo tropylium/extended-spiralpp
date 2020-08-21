@@ -399,10 +399,8 @@ def learn(
 
         stats["step"] = stats.get("step", 0) + flags.unroll_length * flags.batch_size
         stats["episode_returns"] = tuple(episode_returns.cpu().numpy())
-        stats["mean_environment_return"] = torch.mean(episode_returns).item()
-        stats["mean_discriminator_return"] = torch.mean(
-            torch.sum(discriminator_reward, dim=0)
-        ).item()
+        stats["mean_environment_return"] = episode_returns.mean().item()
+        stats["mean_discriminator_return"] = discriminator_reward.mean().item()
         stats["mean_episode_return"] = (
             stats["mean_environment_return"] + stats["mean_discriminator_return"]
         )
