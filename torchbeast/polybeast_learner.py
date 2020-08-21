@@ -606,10 +606,12 @@ def train(flags):
 
     obs_shape = env.observation_space["canvas"].shape
     action_shape = env.action_space.nvec
+    order = env.order
     env.close()
 
     model = models.Net(
         obs_shape=obs_shape,
+        order=order,
         action_shape=action_shape,
         grid_shape=(grid_width, grid_width),
     )
@@ -617,6 +619,7 @@ def train(flags):
 
     actor_model = models.Net(
         obs_shape=obs_shape,
+        order=order,
         action_shape=action_shape,
         grid_shape=(grid_width, grid_width),
     ).eval()

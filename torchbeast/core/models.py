@@ -18,9 +18,11 @@ import torch.nn.functional as F
 
 import nest
 
+import collections
+
 
 class Net(nn.Module):
-    def __init__(self, obs_shape, action_shape, grid_shape):
+    def __init__(self, obs_shape, order, action_shape, grid_shape):
         super(Net, self).__init__()
         self._num_actions = len(action_shape)
 
@@ -69,7 +71,7 @@ class Net(nn.Module):
 
         self.lstm = nn.LSTM(256, 256, num_layers=1)
 
-        self.policy = Decoder(action_shape, grid_shape)
+        self.policy = Decoder(order, action_shape, grid_shape)
         self.baseline = nn.Linear(256, 1)
 
     def _grid(self, batch, h, w):
@@ -127,21 +129,29 @@ class Net(nn.Module):
 
 class Decoder(nn.Module):
     SPATIAL_ACTIONS = ["end", "control"]
+    ORDER = [
+        "flag",
+        "end",
+        "control",
+        "size",
+        "speed",
+        "pressure",
+        "red",
+        "green",
+        "blue",
+    ]
 
-    def __init__(self, action_shape, grid_shape):
+    def __init__(self, order, action_shape, grid_shape):
         super(Decoder, self).__init__()
-        self.num_actions = len(action_shape)
-        modules = []
-        action_shape = action_shape
+        self._order = [k for k in self.ORDER if k in order]
+        self._action_order = order
 
-        def weights_init(m):
-            if isinstance(m, (nn.Conv2d, nn.Linear)):
-                nn.init.normal_(m.weight.data, 0.0, 0.01)
-                nn.init.normal_(m.bias.data, 0.0, 0.01)
+        action_shape = dict(zip(self._action_order, action_shape))
 
-        for i in range(self.num_actions):
-            if i < 2:
-                module = [
+        modules = {}
+        for k in self._action_order:
+            if k in self.SPATIAL_ACTIONS:
+                module = nn.Sequential(
                     View(-1, 16, 4, 4),
                     nn.ConvTranspose2d(16, 32, 4, 2, 1),
                     *[ResBlock(32) for i in range(8)],
@@ -149,60 +159,67 @@ class Decoder(nn.Module):
                     nn.ConvTranspose2d(32, 32, 4, 2, 1),
                     nn.Conv2d(32, 1, 3, 1, 1),
                     nn.Flatten(1),
-                    # View(-1, 32 * 32),
-                ]
-                module[-2].apply(weights_init)
-                module = nn.Sequential(*module)
+                )
             else:
-                module = nn.Linear(256, action_shape[i])
-                module.apply(weights_init)
-            modules.append(module)
-        self.decode = nn.ModuleList(modules)
+                module = nn.Linear(256, action_shape[k])
+            modules[k] = module
 
-        modules = []
-        for i, shape in enumerate(action_shape[:-1]):
-            if i < 2:
+        self.decode = nn.ModuleDict(modules)
+
+        modules = {}
+        for k in self._order[:-1]:
+            if k in self.SPATIAL_ACTIONS:
                 module = Location(grid_shape)
             else:
-                module = Scalar(shape)
-            modules.append(module)
+                module = Scalar(action_shape[k])
+            modules[k] = module
 
-        self.mlp = nn.ModuleList(modules)
+        self.mlp = nn.ModuleDict(modules)
 
         self.concat_fc = nn.Sequential(nn.Linear(16 + 256, 256), nn.ReLU(inplace=True))
         self.relu = nn.ReLU(inplace=True)
 
     def forward(self, h, actions=None):
-        logits = []
+        dict_logits = collections.OrderedDict({k: None for k in self._action_order})
+
         if self.training:
-            for i in range(self.num_actions):
-                logit = self.decode[i](h)
+            dict_actions = collections.OrderedDict(
+                zip(self._action_order, actions.split(1, dim=1))
+            )
 
-                if i != self.num_actions - 1:
-                    concat = torch.cat(
-                        [h, self.mlp[i](actions[:, i : i + 1].float())], dim=1
-                    )
-                    residual = self.concat_fc(concat)
-                    h = self.relu(h + residual)
+            for k in self._order:
+                logit = self.decode[k](h)
+                dict_logits[k] = logit
 
-                logits.append(logit)
+                if k == self._order[-1]:
+                    break
 
+                concat = torch.cat([h, self.mlp[k](dict_actions[k].float())], dim=1)
+                residual = self.concat_fc(concat)
+                h = self.relu(h + residual)
+
+            logits = list(dict_logits.values())
             return actions, logits
+
         else:
-            actions = []
-            for i in range(self.num_actions):
-                logit = self.decode[i](h)
+            dict_actions = collections.OrderedDict({k: None for k in self._action_order})
+
+            for k in self._order:
+                logit = self.decode[k](h)
                 action = torch.multinomial(F.softmax(logit, dim=1), num_samples=1)
 
-                if i != self.num_actions - 1:
-                    concat = torch.cat([h, self.mlp[i](action.float())], dim=1)
-                    residual = self.concat_fc(concat)
-                    h = self.relu(h + residual)
+                dict_actions[k] = action
+                dict_logits[k] = logit
 
-                actions.append(action)
-                logits.append(logit)
+                if k == self._order[-1]:
+                    break
 
-            actions = torch.cat(actions, dim=1)
+                concat = torch.cat([h, self.mlp[k](action.float())], dim=1)
+                residual = self.concat_fc(concat)
+                h = self.relu(h + residual)
+
+            actions = torch.cat(list(dict_actions.values()), dim=1)
+            logits = list(dict_logits.values())
             return actions, logits
 
 
