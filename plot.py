@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 df = pd.read_csv("logs.csv")
 
 step = df["step"].values
+# df["entropy_loss"] = -1 * df["entropy_loss"]
 
 
 def single_plot(ax, key, window):
@@ -67,12 +68,14 @@ def plot(keys, index=None, y_label=None, title=None, window=None, log=False):
 
 
 plot(["fake_loss", "real_loss"], index=(1, 1), log=True)
-plot("D_loss", log=False)
+plot("D_loss", log=True)
 
-plot(["D_x", "D_G_z1"], index=(1, 1), log=True)
-
-plot("mean_discriminator_returns", window=8, log=True)
+plot("mean_discriminator_return", window=10, log=True)
+plot("mean_environment_return", log=True)
+plot("mean_episode_return")
 
 plot(["total_loss", "pg_loss", "entropy_loss", "baseline_loss"])
+plot("baseline_loss", log=True)
+plot("n_discriminator_updates")
 
 plt.show()
