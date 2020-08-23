@@ -17,13 +17,12 @@ RUN apt-get update && apt-get install -y \
     libjson-c-dev \
     intltool \
     libx11-dev \
-    libxext-dev
+    libxext-dev \
+    libgl1-mesa-glx
 
 WORKDIR /src
 
-RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
-
-RUN bash Miniconda3-latest-Linux-x86_64.sh -b
+RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh RUN bash Miniconda3-latest-Linux-x86_64.sh -b
 
 ENV PATH /root/miniconda3/bin:$PATH
 
@@ -101,7 +100,7 @@ RUN python setup.py install
 
 WORKDIR /src/spiralpp
 # Collect and install grpc.
-RUN conda install protobuf
+RUN conda install protobuf=3.12.3
 RUN ./scripts/install_grpc.sh
 
 # Install nest.
