@@ -9,3 +9,5 @@ pre-commit
 ## torchvision  # for downloading datasets
 requests
 tqdm
+## jupyter notebook
+notebook

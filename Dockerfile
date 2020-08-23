@@ -124,4 +124,4 @@ CMD ["bash", "-c", "python -m torchbeast.polybeast --xpid example"]
 #   docker build -t spiralpp .
 #   docker run --name spiralpp spiralpp
 # or
-#   docker run --name spiralpp -it spiralpp /bin/bash
+#   docker run --name spiralpp -it -p 8888:8888 spiralpp /bin/bash

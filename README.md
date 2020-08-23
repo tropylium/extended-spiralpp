@@ -12,7 +12,7 @@ and run it is to use Docker:
 
 ```shell
 $ docker build -t spiralpp .
-$ docker run --name spiralpp -it spiralpp /bin/bash
+$ docker run --name spiralpp -it -p 8888:8888 spiralpp /bin/bash
 ```
 
 or 
@@ -128,46 +128,17 @@ Start another terminal and run:
 $ python -m torchbeast.polybeast --no_start_servers
 ```
 
-## (Very rough) overview of the system
+### Testing trained models
 
-```
-|-----------------|     |-----------------|                  |-----------------|
-|     ACTOR 1     |     |     ACTOR 2     |                  |     ACTOR n     |
-|-------|         |     |-------|         |                  |-------|         |
-|       |  .......|     |       |  .......|     .   .   .    |       |  .......|
-|  Env  |<-.Model.|     |  Env  |<-.Model.|                  |  Env  |<-.Model.|
-|       |->.......|     |       |->.......|                  |       |->.......|
-|-----------------|     |-----------------|                  |-----------------|
-   ^     I                 ^     I                              ^     I
-   |     I                 |     I                              |     I Actors
-   |     I rollout         |     I rollout               weights|     I send
-   |     I                 |     I                     /--------/     I rollouts
-   |     I          weights|     I                     |              I (frames,
-   |     I                 |     I                     |              I  actions
-   |     I                 |     v                     |              I  etc)
-   |     L=======>|--------------------------------------|<===========J
-   |              |.........      LEARNER                |
-   \--------------|..Model.. Consumes rollouts, updates  |    Learner       |----------------------------|
-     Learner      |.........       model weights         |     sends        |    DISCRIMINATOR LEARNER   |
-      sends       |                                      |    weights       |.................           |
-     weights      |.................                     |<=================|..Discriminator..           |
-                  |..Discriminator.. Computes reward     |----------------->|.................           |
-                  |.................                     |  Learner sends   | Consumes frames and images |
-                  |--------------------------------------|  frames, images  |----------------------------|
+The provided [jupyter notebook](notebooks/demo.ipynb) will load checkpoints at a specified path to draw a single sample.
+
+If you're using docker run 
+
+```shell
+$ jupyter notebook --notebook-dir=/src/spiralpp/notebooks --ip 0.0.0.0 --no-browser --allow-root
 ```
 
-The system has three main components, actors, learner and d_learner.
-
-Actors generate rollouts (tensors from a number of steps of
-environment-agent interactions, including environment frames, agent
-actions and policy logits, and other data).
-
-The learner consumes that experience, computes the reward using the discriminator, 
-computes a loss and updates the weights. The new weights are then propagated to the actors.
-Frame and image pairs are sent to d_learner.
-
-D_learner consumes that pair and computes a loss and updates the weights.
-The new weights are then propagated to the learner's discriminator.
+make sure you opened a port for the container.
 
 ## Repository contents
 
