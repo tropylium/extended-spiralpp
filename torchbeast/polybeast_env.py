@@ -91,11 +91,11 @@ def main(flags):
     else:
         dataset = start = end = None
 
-    is_color = flags.use_color or flags.env_type == "fluid"
-    if is_color is False:
+    env_uses_color = flags.use_color or flags.env_type == "fluid"
+    if env_uses_color is False:
         grayscale = True
     else:
-        grayscale = is_color and not dataset_uses_color
+        grayscale = not dataset_uses_color
 
     processes = []
     for i in range(flags.num_actors):
