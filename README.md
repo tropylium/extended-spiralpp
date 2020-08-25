@@ -18,7 +18,7 @@ $ docker run --name spiralpp -it -p 8888:8888 spiralpp /bin/bash
 or 
 
 ```shell
-$ docker run -it urw7rs/spiralpp /bin/bash
+$ docker run -it -p 8888:8888 urw7rs/spiralpp:latest /bin/bash
 ```
 
 To run PolyBeast directly on Linux, follow this guide.
@@ -103,7 +103,6 @@ $ python -m torchbeast.polybeast \
      --canvas_width 64 \
      --use_pressure \
      --use_tca \
-     --power_iters 40 \
      --num_actors 64 \
      --total_steps 30000000 \
      --policy_learning_rate 0.0004 \
@@ -119,7 +118,7 @@ written to `~/logs/torchbeast/latest/model.tar`.
 The environment servers can also be started separately:
 
 ```shell
-$ python -m torchbeast.polybeast_env --num_servers 10
+$ python -m torchbeast.polybeast_env --num_actors 10
 ```
 
 Start another terminal and run:
