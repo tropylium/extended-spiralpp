@@ -166,13 +166,14 @@ def compute_entropy_loss(logits):
 
 
 def compute_policy_gradient_loss(logits, actions, advantages):
-    cross_entropy = 0
+    cross_entropy = 0.0
     for i, logit in enumerate(logits):
-        cross_entropy += F.nll_loss(
+        cross_entropy = cross_entropy + F.nll_loss(
             F.log_softmax(torch.flatten(logit, 0, 1), dim=-1),
             target=torch.flatten(actions[..., i].long(), 0, 1),
             reduction="none",
         )
+
     cross_entropy = cross_entropy.view_as(advantages)
     return torch.sum(cross_entropy * advantages.detach())
 
@@ -505,8 +506,9 @@ def learn_D(
             stats["n_discriminator_updates"] = (
                 stats.get("n_discriminator_updates", 0) + 1
             )
-            stats["grad_norm"] = grad_norm.mean().item()
-            stats["grad_penalty"] = grad_penalty.item()
+            if flags.gp_weight != 0:
+                stats["grad_norm"] = grad_norm.mean().item()
+                stats["grad_penalty"] = grad_penalty.item()
 
             if replay_queue.is_closed():
                 return
@@ -765,22 +767,6 @@ def train(flags):
     )
     replay_buffer_loader.daemon = True
 
-    def free_learner_queue(flags, learner_queue, d_learner, learner_threads):
-        while len(replay_buffer) < flags.replay_buffer_size:
-            next(learner_queue)
-
-        d_learner.start()
-
-        for t in learner_threads:
-            t.start()
-
-    startup_thread = threading.Thread(
-        target=free_learner_queue,
-        name="startup-thread",
-        args=(flags, learner_queue, d_learner, learner_threads),
-    )
-    startup_thread.start()
-
     replay_buffer_loader.start()
 
     actorpool_thread.start()
@@ -813,26 +799,13 @@ def train(flags):
         return f"{x:1.5}" if isinstance(x, float) else str(x)
 
     try:
-        while True:
-            start_time = timeit.default_timer()
-            start_frame = len(replay_buffer)
-            if start_frame == flags.replay_buffer_size:
-                logging.info("Replay buffer loaded with %i frames.", len(replay_buffer))
-                break
+        while len(replay_buffer) < flags.batch_size:
             time.sleep(5)
-            end_frame = len(replay_buffer)
 
-            logging.info(
-                "Frame %i of %i @ %.1f FPS. Inference batcher size: %i."
-                " Replay queue size: %i."
-                " Replay buffer size: %i",
-                end_frame,
-                flags.replay_buffer_size,
-                (end_frame - start_frame) / (timeit.default_timer() - start_time),
-                inference_batcher.size(),
-                replay_queue.size(),
-                len(replay_buffer),
-            )
+        d_learner.start()
+        
+        for t in learner_threads:
+            t.start()
 
         last_checkpoint_time = timeit.default_timer()
         while True:

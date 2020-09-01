@@ -134,7 +134,7 @@ The provided [jupyter notebook](notebooks/demo.ipynb) will load checkpoints at a
 If you're using docker run 
 
 ```shell
-$ jupyter notebook --notebook-dir=/src/spiralpp/notebooks --ip 0.0.0.0 --no-browser --allow-root
+$ jupyter notebook --ip 0.0.0.0 --no-browser --allow-root
 ```
 
 make sure you opened a port for the container.
