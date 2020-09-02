@@ -126,7 +126,7 @@ class FloatNCHW(gym.ObservationWrapper):
         return obs
 
 
-class SampleNoise(gym.ObservationWrapper):
+class SampleNoise(gym.Wrapper):
     def __init__(
         self, env, dict_space_key, noise_dim=10,
     ):
@@ -140,9 +140,16 @@ class SampleNoise(gym.ObservationWrapper):
         )
         self.observation_space = spaces.Dict(new_space)
 
-    def observation(self, obs):
-        obs[self._key] = np.random.normal(size=(self.dim,)).astype(np.float32)
+    def reset(self):
+        obs = self.env.reset()
+        self.noise = np.random.normal(size=(self.dim,)).astype(np.float32)
+        obs[self._key] = self.noise
         return obs
+    
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+        obs[self._key] = self.noise
+        return obs, reward, done, info
 
 
 class SavePrevAction(gym.Wrapper):
