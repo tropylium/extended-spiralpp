@@ -23,7 +23,7 @@ import timeit
 import traceback
 import random
 
-os.environ["OMP_NUM_THREADS"] = "1"  # Necessary for multithreading.
+os.environ["OMP_NUM_THREADS"] = "4"  # Necessary for multithreading.
 
 import nest
 import torch
@@ -800,10 +800,12 @@ def train(flags):
 
     try:
         while len(replay_buffer) < flags.batch_size:
-            time.sleep(5)
+            if learner_queue.size() >= flags.batch_size:
+                next(learner_queue)
+            time.sleep(0.01)
 
         d_learner.start()
-        
+
         for t in learner_threads:
             t.start()
 
