@@ -366,11 +366,6 @@ def learn(
             bootstrap_value=bootstrap_value,
         )
 
-        vtrace_returns = nest.map(
-            lambda t: t.to(device=flags.learner_device, non_blocking=True),
-            vtrace_returns,
-        )
-
         vtrace_returns = vtrace.VTraceFromLogitsReturns._make(vtrace_returns)
 
         pg_loss = compute_policy_gradient_loss(
