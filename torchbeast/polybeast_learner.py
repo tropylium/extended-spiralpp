@@ -23,7 +23,7 @@ import timeit
 import traceback
 import random
 
-os.environ["OMP_NUM_THREADS"] = "4"  # Necessary for multithreading.
+os.environ["OMP_NUM_THREADS"] = "1"  # Necessary for multithreading.
 
 import nest
 import torch
@@ -632,12 +632,6 @@ def train(flags):
     else:
         D = models.Discriminator(obs_shape)
     D.to(device=flags.learner_device)
-
-    def weights_init(m):
-        if isinstance(m, nn.Conv2d):
-            nn.init.normal_(m.weight.data, 0.0, 0.02)
-
-    D.apply(weights_init)
 
     if flags.condition:
         D_eval = models.ComplementDiscriminator(obs_shape)
