@@ -74,27 +74,6 @@ def from_logits(
     clip_pg_rho_threshold=1.0,
 ):
     """V-trace for softmax policies."""
-    (
-        behavior_policy_logits,
-        target_policy_logits,
-        actions,
-        discounts,
-        rewards,
-        values,
-        bootstrap_value,
-    ) = nest.map(
-        lambda t: t.to(device="cpu", non_blocking=True),
-        [
-            behavior_policy_logits,
-            target_policy_logits,
-            actions,
-            discounts,
-            rewards,
-            values,
-            bootstrap_value,
-        ],
-    )
-
     target_action_log_probs = action_log_probs(target_policy_logits, actions)
     behavior_action_log_probs = action_log_probs(behavior_policy_logits, actions)
     log_rhos = target_action_log_probs - behavior_action_log_probs
