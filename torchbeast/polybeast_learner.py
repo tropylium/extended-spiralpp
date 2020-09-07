@@ -23,7 +23,7 @@ import timeit
 import traceback
 import random
 
-os.environ["OMP_NUM_THREADS"] = "1"  # Necessary for multithreading.
+os.environ["OMP_NUM_THREADS"] = "4"  # Necessary for multithreading.
 
 import nest
 import torch
@@ -428,7 +428,6 @@ def learn_D(
     D,
     D_eval,
     optimizer,
-    scheduler,
     stats,
     plogger,
 ):
@@ -489,7 +488,6 @@ def learn_D(
             loss.backward()
 
             optimizer.step()
-            scheduler.step()
 
             D_eval.load_state_dict(D.state_dict())
 
@@ -647,7 +645,6 @@ def train(flags):
         )
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-    D_scheduler = torch.optim.lr_scheduler.LambdaLR(D_optimizer, lr_lambda)
 
     # The ActorPool that will run `flags.num_actors` many loops.
     actors = libtorchbeast.ActorPool(
@@ -690,8 +687,7 @@ def train(flags):
         D.load_state_dict(checkpoint_states["D_state_dict"])
         optimizer.load_state_dict(checkpoint_states["optimizer_state_dict"])
         D_optimizer.load_state_dict(checkpoint_states["D_optimizer_state_dict"])
-        scheduler.load_state_dict(checkpoint_states["D_scheduler_state_dict"])
-        D_scheduler.load_state_dict(checkpoint_states["scheduler_state_dict"])
+        scheduler.load_state_dict(checkpoint_states["scheduler_state_dict"])
         stats = checkpoint_states["stats"]
         replay_buffer.load_checkpoint(checkpoint_states["replay_buffer"])
         logging.info(f"Resuming preempted job, current stats:\n{stats}")
@@ -739,7 +735,6 @@ def train(flags):
             D,
             D_eval,
             D_optimizer,
-            D_scheduler,
             stats,
             plogger,
         ),
@@ -776,7 +771,6 @@ def train(flags):
                 "optimizer_state_dict": optimizer.state_dict(),
                 "D_optimizer_state_dict": D_optimizer.state_dict(),
                 "scheduler_state_dict": scheduler.state_dict(),
-                "D_scheduler_state_dict": D_scheduler.state_dict(),
                 "stats": stats,
                 "flags": vars(flags),
                 "replay_buffer": replay_buffer.checkpoint(),

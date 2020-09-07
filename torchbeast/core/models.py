@@ -160,8 +160,15 @@ class Decoder(nn.Module):
                     nn.Conv2d(32, 1, 3, 1, 1),
                     nn.Flatten(1),
                 )
+
+                nn.init.normal_(module[-2].weight, std=0.01)
+                nn.init.zeros_(module[-2].bias)
             else:
                 module = nn.Linear(256, action_shape[k])
+
+                nn.init.normal_(module.weight, std=0.01)
+                nn.init.zeros_(module.bias)
+
             modules[k] = module
 
         self.decode = nn.ModuleDict(modules)
