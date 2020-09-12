@@ -99,8 +99,6 @@ parser.add_argument("--num_inference_threads", default=2, type=int,
                     metavar="N", help="Number learner threads.")
 parser.add_argument("--disable_cuda", action="store_true",
                     help="Disable CUDA.")
-parser.add_argument("--replay_buffer_size", default=None, type=int, metavar="N",
-                    help="Replay buffer size. Defaults to batch_size * 20.")
 parser.add_argument("--max_learner_queue_size", default=None, type=int, metavar="N",
                     help="Optional maximum learner queue size. Defaults to batch_size.")
 parser.add_argument("--unroll_length", default=20, type=int, metavar="T",
@@ -461,7 +459,6 @@ def train(flags):
         batch_dim=1,
         minimum_batch_size=flags.batch_size,
         maximum_batch_size=flags.batch_size,
-        timeout_ms=100,
         check_inputs=True,
         maximum_queue_size=flags.batch_size,
     )
