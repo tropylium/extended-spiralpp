@@ -23,7 +23,7 @@ import timeit
 import traceback
 import random
 
-os.environ["OMP_NUM_THREADS"] = "4"  # Necessary for multithreading.
+os.environ["OMP_NUM_THREADS"] = "1"  # Necessary for multithreading.
 
 import nest
 import torch
