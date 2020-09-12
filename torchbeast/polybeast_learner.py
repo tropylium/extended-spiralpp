@@ -595,7 +595,6 @@ def train(flags):
         D_optimizer.load_state_dict(checkpoint_states["D_optimizer_state_dict"])
         scheduler.load_state_dict(checkpoint_states["scheduler_state_dict"])
         stats = checkpoint_states["stats"]
-        replay_buffer.load_checkpoint(checkpoint_states["replay_buffer"])
         logging.info(f"Resuming preempted job, current stats:\n{stats}")
 
     # Initialize actor model like learner model.
@@ -664,8 +663,7 @@ def train(flags):
                 "D_optimizer_state_dict": D_optimizer.state_dict(),
                 "scheduler_state_dict": scheduler.state_dict(),
                 "stats": stats,
-                "flags": vars(flags),
-                "replay_buffer": replay_buffer.checkpoint(),
+                "flags": vars(flags)
             },
             checkpointpath,
         )
