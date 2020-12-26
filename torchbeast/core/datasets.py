@@ -23,18 +23,23 @@ from torchvision.datasets.utils import check_integrity, verify_str_arg
 
 
 class CelebAHQ(VisionDataset):
-    base_folder = "CelebAMask-HQ"
+    base_folder = "celeba-hq"
 
     # yapf: disable
     file_list = [
         # File ID                         MD5 Hash                            Filename
-        ("1badu11NqxGf6qM3PTTooQDJvQbejgbTv", "8a26c2c381f1cfb210d16b54bfd5259e", "CelebAMask-HQ.zip"),
+        ("1badu11NqxGf6qM3PTTooQDJvQbejgbTv", "b08032b342a8e0cf84c273db2b52eef3", "CelebAMask-HQ.zip"),
         ("0B7EVK8r0v71pY0NSMzRuSXJEVkk", "d32c9cbf5e040fd4025c592c306e6668", "list_eval_partition.txt"),
     ]
     # yapf: enable
 
     def __init__(
-        self, root, split="train", target_type="attr", transform=None, download=False,
+        self,
+        root,
+        split="train",
+        target_type="attr",
+        transform=None,
+        download=False,
     ):
         import pandas
 
@@ -76,7 +81,7 @@ class CelebAHQ(VisionDataset):
             index_col=0,
         )
         index = pandas.read_csv(
-            fn("CelebA-HQ-to-CelebA-mapping.txt"),
+            fn("CelebAMask-HQ", "CelebA-HQ-to-CelebA-mapping.txt"),
             delim_whitespace=True,
             header=0,
             usecols=["idx", "orig_idx"],
@@ -99,7 +104,7 @@ class CelebAHQ(VisionDataset):
                 return False
 
         # Should check a hash of the images
-        return os.path.isdir(os.path.join(self.root, self.base_folder, "CelebA-HQ-img"))
+        return os.path.isdir(os.path.join(self.root, self.base_folder, "CelebAMask-HQ"))
 
     def download(self):
         import zipfile
