@@ -21,7 +21,6 @@ import threading
 import time
 import timeit
 import traceback
-import random
 
 os.environ["OMP_NUM_THREADS"] = "1"  # Necessary for multithreading.
 
@@ -376,7 +375,7 @@ def learn_D(
         for real, _ in dataloader:
             fake = next(replay_queue)["canvas"].squeeze(0)
             fake = fake.to(flags.learner_device, non_blocking=True)
-            
+
             real = real.to(flags.learner_device, non_blocking=True)
 
             if flags.condition:
@@ -402,7 +401,7 @@ def learn_D(
             D_G_z1 = torch.sigmoid(p_fake).mean()
 
             loss = real_loss + fake_loss
-            
+
             loss.backward()
 
             optimizer.step()
@@ -624,7 +623,11 @@ def train(flags):
         threading.Thread(
             target=inference,
             name="inference-thread-%i" % i,
-            args=(flags, inference_batcher, actor_model,),
+            args=(
+                flags,
+                inference_batcher,
+                actor_model,
+            ),
         )
         for i in range(flags.num_inference_threads)
     ]
@@ -663,7 +666,7 @@ def train(flags):
                 "D_optimizer_state_dict": D_optimizer.state_dict(),
                 "scheduler_state_dict": scheduler.state_dict(),
                 "stats": stats,
-                "flags": vars(flags)
+                "flags": vars(flags),
             },
             checkpointpath,
         )
