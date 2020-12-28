@@ -222,7 +222,7 @@ def reward_function(flags, done, new_frame, D):
             flags.unroll_length + 1, flags.batch_size, device=flags.learner_device
         )
 
-        reward[index[:, 0], index[:, 1]] += torch.log(D(new_frame) + 1e-12)
+        reward[index[:, 0], index[:, 1]] += D(new_frame)
 
     return reward
 
