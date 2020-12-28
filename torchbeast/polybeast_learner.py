@@ -222,7 +222,7 @@ def reward_function(flags, done, new_frame, D):
             flags.unroll_length + 1, flags.batch_size, device=flags.learner_device
         )
 
-        reward[index[:, 0], index[:, 1]] += D(new_frame)
+        reward[index[:, 0], index[:, 1]] += torch.log(D(new_frame) + 1e-12)
 
     return reward
 
@@ -483,18 +483,14 @@ def train(flags):
                 break
         pipe_id += 1
 
-    dataset_uses_color = flags.dataset not in ["mnist", "omniglot"]
-    grayscale = dataset_uses_color and not flags.use_color
+    dataset_is_gray = flags.dataset in ["mnist", "omniglot"]
+    grayscale = not dataset_is_gray and not flags.use_color
+    dataset_is_gray |= grayscale
+
     dataset = utils.create_dataset(flags.dataset, grayscale)
 
-    is_color = flags.use_color or flags.env_type == "fluid"
-    if is_color is False:
-        grayscale = True
-    else:
-        grayscale = is_color and not dataset_uses_color
-
     env_name, config = utils.parse_flags(flags)
-    env = utils.create_env(env_name, config, grayscale, dataset=None)
+    env = utils.create_env(env_name, config, dataset_is_gray, dataset=None)
 
     if flags.condition:
         new_space = env.observation_space.spaces

@@ -34,12 +34,7 @@ class CelebAHQ(VisionDataset):
     # yapf: enable
 
     def __init__(
-        self,
-        root,
-        split="train",
-        target_type="attr",
-        transform=None,
-        download=False,
+        self, root, split="train", target_type="attr", transform=None, download=False,
     ):
         import pandas
 
@@ -131,14 +126,14 @@ class CelebAHQ(VisionDataset):
     def __getitem__(self, index):
         X = PIL.Image.open(
             os.path.join(
-                self.root, self.base_folder, "CelebA-HQ-img", self.filename[index]
+                self.root, self.base_folder, "CelebAMask-HQ", "CelebA-HQ-img", self.filename[index]
             )
         )
 
         if self.transform is not None:
             X = self.transform(X)
 
-        return X
+        return X, 0
 
     def __len__(self):
         return len(self.filename)

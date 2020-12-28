@@ -57,7 +57,7 @@ class WarpFrame(gym.ObservationWrapper):
         else:
             original_space = self.observation_space.spaces[self._key]
 
-        self._grayscale = original_space.shape[-1] == 3
+        self._grayscale = grayscale and original_space.shape[-1] == 3
 
         new_space = gym.spaces.Box(
             low=0,

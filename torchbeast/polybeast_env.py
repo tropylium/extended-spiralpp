@@ -82,20 +82,15 @@ def main(flags):
     if not flags.pipes_basename.startswith("unix:"):
         raise Exception("--pipes_basename has to be of the form unix:/some/path.")
 
-    dataset_uses_color = flags.dataset not in ["mnist", "omniglot"]
-    grayscale = dataset_uses_color and not flags.use_color
+    dataset_is_gray = flags.dataset in ["mnist", "omniglot"]
+    grayscale = not dataset_is_gray and not flags.use_color
+    dataset_is_gray |= grayscale
 
     if flags.condition:
         dataset = utils.create_dataset(flags.dataset, grayscale)
         per_actor = len(dataset) // flags.num_actors
     else:
         dataset = start = end = None
-
-    env_uses_color = flags.use_color or flags.env_type == "fluid"
-    if env_uses_color is False:
-        grayscale = True
-    else:
-        grayscale = not dataset_uses_color
 
     processes = []
     for i in range(flags.num_actors):
@@ -108,7 +103,7 @@ def main(flags):
             args=(
                 env_name,
                 config,
-                grayscale,
+                dataset_is_gray,
                 dataset,
                 start,
                 end,
