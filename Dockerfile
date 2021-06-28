@@ -44,9 +44,8 @@ RUN conda create -y -n spiralpp python=3.7 \
     mkl \
     mkl-include \
     setuptools \
-    cmake \
     cffi \
-    typing
+    typing && conda install -c anaconda cmake=3.14
 
 # Activate environment in .bashrc.
 RUN echo "conda activate spiralpp" >> /root/.bashrc
