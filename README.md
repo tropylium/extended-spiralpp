@@ -1,7 +1,7 @@
 # SPIRAL++
 
 A PyTorch implementation of [Unsupervised Doodling and Painting with Improved SPIRAL
-by Mellor, Park, Ganin et al.](https://arxiv.org/abs/1802.01561)
+by Mellor, Park, Ganin et al.](https://arxiv.org/abs/1910.01007)
 
 For further details, see https://learning-to-paint.github.io for paper with generation videos.
 
