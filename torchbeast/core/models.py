@@ -90,7 +90,7 @@ class Net(nn.Module):
 
     def forward(self, obs, done, core_state):
         T, B, C, H, W = obs["canvas"].shape
-        grid = self._grid(T * B, H, W)
+        grid = self._grid(T * B, H, W).to(obs["canvas"].device)
 
         notdone = (~done).float()
         obs["prev_action"] = obs["prev_action"] * notdone.unsqueeze(dim=2)
@@ -209,7 +209,9 @@ class Decoder(nn.Module):
             return actions, logits
 
         else:
-            dict_actions = collections.OrderedDict({k: None for k in self._action_order})
+            dict_actions = collections.OrderedDict(
+                {k: None for k in self._action_order}
+            )
 
             for k in self._order:
                 logit = self.decode[k](h)
