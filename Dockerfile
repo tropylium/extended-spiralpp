@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:experimental
-FROM nvidia/cuda:10.2-cudnn7-runtime-ubuntu18.04
+FROM nvidia/cuda:11.3.1-cudnn8-devel-ubuntu18.04
 
 SHELL ["/bin/bash", "-c"]
 
@@ -83,20 +83,15 @@ RUN pip install -e .
 
 WORKDIR /src
 
-RUN git clone --single-branch --branch v1.6.0 --recursive https://github.com/pytorch/pytorch
-
+RUN git clone --single-branch --branch v1.10.1 --recursive https://github.com/pytorch/pytorch
 WORKDIR /src/pytorch
-
 ENV CMAKE_PREFIX_PATH ${CONDA_PREFIX}
-
+ENV TORCH_CUDA_ARCH_LIST 8.6
 RUN python setup.py install
 
 WORKDIR /src
-
-RUN git clone --single-branch --branch v0.7.0 https://github.com/pytorch/vision.git
-
+RUN git clone --single-branch --branch v0.11.1 https://github.com/pytorch/vision.git
 WORKDIR /src/vision 
-
 RUN python setup.py install
 
 WORKDIR /src/spiralpp
